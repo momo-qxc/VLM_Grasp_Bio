@@ -1,0 +1,16 @@
+# Microscope Material with Textures
+# For MuJoCo simulation
+
+newmtl Microscope
+Ns 20.000000
+Ka 1.000000 1.000000 1.000000
+Kd 0.819608 0.819608 0.819608
+Ks 0.000000 0.000000 0.000000
+Ke 0.000000 0.000000 0.000000
+Ni 1.500000
+d 1.000000
+illum 2
+
+# Texture maps
+map_Kd textures/Microscope_AlbedoTransparency.png
+map_Bump textures/Microscope_Normal.png
