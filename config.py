@@ -22,10 +22,10 @@ class Config:
 
     # ==================== API Keys ====================
     # 阿里云 Qwen VLM API Key
-    QWEN_API_KEY = 'sk-3d29c129d0664685853e5311a2241127'
+    QWEN_API_KEY = 'your_key'
 
     # Google Gemini API Key
-    GEMINI_API_KEY = 'AIzaSyBJvmAHO92kO4t0zKo7sqrtrnk9jmR3HRk'
+    GEMINI_API_KEY = 'your_key'
 
     # ==================== API Base URLs ====================
     # 阿里云 Qwen API 地址
