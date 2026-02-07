@@ -139,10 +139,12 @@ python main_vlm.py
 放置完成：
 
 ![放置完成](Visual%20results/放置完成.png)
+自然语言识别位置（蓝色：参照物；红色：放置点）：
+![自然语言识别位置](debug_place_position.jpg)
 
 视频演示：
 
-<video src="Visual%20results/video.webm" controls></video>
+<video src="Visual%20results/video.mp4" controls></video>
 
 ## 参考
 - 环境配置参考：`https://blog.csdn.net/agentssl/article/details/148089323`
