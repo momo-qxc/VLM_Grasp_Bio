@@ -33,6 +33,427 @@ from google import genai
 from google.genai import types
 
 
+# ----------------------- 指令解析与放置位置识别 -----------------------
+
+def parse_instruction(user_input, image_input=None):
+    """
+    解析用户的自然语言指令，分离抓取目标和放置位置描述。
+
+    输入: "把培养皿放置到显微镜的右边红色区域"
+    输出: {
+        "grasp_target": "培养皿",
+        "place_description": "显微镜的右边红色区域",
+        "has_place_instruction": True
+    }
+    """
+    client = OpenAI(
+        api_key='sk-3d29c129d0664685853e5311a2241127',
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        http_client=httpx.Client(trust_env=False)
+    )
+
+    system_prompt = textwrap.dedent("""\
+    你是一个机器人指令解析系统。请分析用户的自然语言指令，提取以下信息：
+
+    1. 要抓取的物体名称（grasp_target）
+    2. 放置位置的描述（place_description）- 如果用户没有指定放置位置，则为空字符串
+
+    【示例】
+    输入: "把培养皿放置到显微镜的右边"
+    输出: {"grasp_target": "培养皿", "place_description": "显微镜的右边", "has_place_instruction": true}
+
+    输入: "抓取红色的试管"
+    输出: {"grasp_target": "红色的试管", "place_description": "", "has_place_instruction": false}
+
+    输入: "把烧杯移到桌子左上角的红色区域"
+    输出: {"grasp_target": "烧杯", "place_description": "桌子左上角的红色区域", "has_place_instruction": true}
+
+    【注意】
+    - 只返回JSON对象，不要有其他文字
+    - 如果指令中包含"放到"、"放置到"、"移到"、"移动到"等词语，说明有放置指令
+    """)
+
+    messages = [{"role": "system", "content": system_prompt}]
+    user_content = [{"type": "text", "text": f"用户指令：{user_input}"}]
+
+    # 如果提供了图像，也可以帮助理解上下文
+    if image_input is not None:
+        base64_img = encode_np_array(image_input)
+        user_content.insert(0, {
+            "type": "image_url",
+            "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}
+        })
+
+    messages.append({"role": "user", "content": user_content})
+
+    try:
+        completion = client.chat.completions.create(
+            model="qwen-vl-max-latest",
+            messages=messages,
+            temperature=0.1,
+        )
+
+        content = completion.choices[0].message.content
+        print(f"[指令解析] 原始响应: {content}")
+
+        # 解析JSON
+        match = re.search(r'(\{.*\})', content, re.DOTALL)
+        if match:
+            result = json.loads(match.group(1))
+            return result
+        else:
+            # 如果解析失败，假设整个输入都是抓取目标
+            return {
+                "grasp_target": user_input,
+                "place_description": "",
+                "has_place_instruction": False
+            }
+
+    except Exception as e:
+        print(f"[指令解析] 失败: {e}")
+        return {
+            "grasp_target": user_input,
+            "place_description": "",
+            "has_place_instruction": False
+        }
+
+
+def detect_place_position(place_description, global_image, depth_image=None, extra_images=None):
+    """
+    使用VLM在全局图像中识别放置位置。
+    支持多相机图像输入，提供更全面的场景理解。
+
+    参数:
+        place_description: 放置位置描述
+        global_image: 主相机图像 (用于坐标计算)
+        depth_image: 深度图像 (可选)
+        extra_images: 额外的相机图像列表 (可选，用于辅助识别)
+    """
+    client = OpenAI(
+        api_key='sk-3d29c129d0664685853e5311a2241127',
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        http_client=httpx.Client(trust_env=False)
+    )
+
+    h, w = global_image.shape[:2]
+
+    # 如果有多个相机图像，拼接成一张大图用于识别
+    if extra_images and len(extra_images) > 0:
+        print(f"[放置位置识别] 使用多相机融合模式 ({1 + len(extra_images)} 个视角)")
+        # 创建拼接图像用于VLM识别
+        all_images = [global_image] + extra_images
+        # 水平拼接所有图像
+        # 先调整所有图像到相同高度
+        target_h = min(img.shape[0] for img in all_images)
+        resized_images = []
+        for img in all_images:
+            scale = target_h / img.shape[0]
+            new_w = int(img.shape[1] * scale)
+            resized = cv2.resize(img, (new_w, target_h))
+            resized_images.append(resized)
+        combined_image = np.hstack(resized_images)
+        combined_h, combined_w = combined_image.shape[:2]
+        print(f"[放置位置识别] 拼接图像尺寸: {combined_w} x {combined_h}")
+        # 保存拼接图像用于调试
+        cv2.imwrite("debug_combined_views.jpg", combined_image)
+    else:
+        combined_image = global_image
+        combined_h, combined_w = h, w
+
+    # 解析放置描述，提取参考物体和方向
+    reference_object = None
+    direction = None
+    color_region = None  # 新增：颜色区域
+
+    # 检查是否是颜色区域描述
+    color_pattern = r'(红色|绿色|蓝色|黄色|白色|黑色|橙色|紫色)(的)?(区域|地方|位置|部分)'
+    color_match = re.search(color_pattern, place_description)
+    if color_match:
+        color_region = color_match.group(1)
+        print(f"[放置位置识别] 检测到颜色区域描述: {color_region}")
+
+    patterns = [
+        (r'(.+?)的(左边|右边|上面|下面|前面|后面|旁边)', lambda m: (m.group(1), m.group(2))),
+        (r'(左边|右边|上面|下面|前面|后面)的(.+)', lambda m: (m.group(2), m.group(1))),
+    ]
+
+    for pattern, extractor in patterns:
+        match_result = re.search(pattern, place_description)
+        if match_result:
+            reference_object, direction = extractor(match_result)
+            break
+
+    # 解析距离描述，计算偏移量
+    def parse_distance_offset(description):
+        """
+        根据描述中的距离信息计算像素偏移量。
+        相机视角下，大约 1cm ≈ 8-12 像素（取决于深度）
+        """
+        # 检查明确的厘米数值
+        cm_match = re.search(r'(\d+)[-~到]?(\d*)(?:cm|厘米)', description)
+        if cm_match:
+            cm_min = int(cm_match.group(1))
+            cm_max = int(cm_match.group(2)) if cm_match.group(2) else cm_min
+            avg_cm = (cm_min + cm_max) / 2
+            # 大约 10 像素/厘米
+            offset = int(avg_cm * 10)
+            print(f"[距离解析] 检测到距离: {cm_min}-{cm_max}cm → 偏移 {offset} 像素")
+            return max(20, min(200, offset))  # 限制在合理范围内
+
+        # 检查相对距离描述
+        close_keywords = ['紧挨', '紧贴', '贴着', '挨着', '很近', '近一点', '不要太远', '不要离.*太远', '靠近']
+        medium_keywords = ['旁边', '边上', '附近']
+        far_keywords = ['远一点', '远些', '离远', '稍远']
+
+        for keyword in close_keywords:
+            if re.search(keyword, description):
+                print(f"[距离解析] 检测到近距离关键词: '{keyword}' → 偏移 40 像素")
+                return 40
+
+        for keyword in medium_keywords:
+            if re.search(keyword, description):
+                print(f"[距离解析] 检测到中等距离关键词: '{keyword}' → 偏移 70 像素")
+                return 70
+
+        for keyword in far_keywords:
+            if re.search(keyword, description):
+                print(f"[距离解析] 检测到远距离关键词: '{keyword}' → 偏移 120 像素")
+                return 120
+
+        # 默认偏移
+        print(f"[距离解析] 未检测到距离描述，使用默认偏移 80 像素")
+        return 80
+
+    # 计算偏移量
+    pixel_offset = parse_distance_offset(place_description)
+
+    print(f"[放置位置识别] 解析结果: 参考物体='{reference_object}', 方向='{direction}', 颜色区域='{color_region}', 偏移={pixel_offset}像素")
+
+    # ===== 新增：颜色区域识别 =====
+    if color_region:
+        print(f"[放置位置识别] 使用颜色区域识别模式...")
+
+        # 颜色映射（中文到英文）
+        color_map = {
+            "红色": "red",
+            "绿色": "green",
+            "蓝色": "blue",
+            "黄色": "yellow",
+            "白色": "white",
+            "黑色": "black",
+            "橙色": "orange",
+            "紫色": "purple",
+        }
+        color_en = color_map.get(color_region, color_region)
+
+        color_prompt = f"""请在图像中找到 {color_region}/{color_en} 颜色的区域，并返回该区域的中心点坐标。
+
+【重要提示】
+- 仔细观察桌面/工作台上的颜色标记区域
+- {color_region}区域通常是桌面上的彩色标记或贴纸
+- 图像尺寸: {w} x {h} 像素
+- 坐标系: 左上角(0,0)，x向右增大，y向下增大
+
+请返回JSON格式：
+{{"found": true, "center": [x, y], "reason": "找到{color_region}区域的原因"}}
+如果找不到{color_region}区域，返回：
+{{"found": false, "reason": "未找到的原因"}}"""
+
+        messages = [{"role": "system", "content": color_prompt}]
+        base64_img = encode_np_array(global_image)
+        messages.append({"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}},
+            {"type": "text", "text": f"请找到图像中的{color_region}区域"}
+        ]})
+
+        try:
+            completion = client.chat.completions.create(
+                model="qwen-vl-max-latest", messages=messages, temperature=0.1)
+            content = completion.choices[0].message.content
+            print(f"[放置位置识别] 颜色区域识别响应: {content}")
+
+            json_match = re.search(r'(\{.*\})', content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group(1))
+                if result.get("found") and "center" in result:
+                    place_x, place_y = result["center"]
+                    place_x = max(0, min(w-1, int(place_x)))
+                    place_y = max(0, min(h-1, int(place_y)))
+
+                    return {
+                        "place_point": [place_x, place_y],
+                        "confidence": 0.85,
+                        "reason": f"找到{color_region}区域在({place_x},{place_y})"
+                    }
+        except Exception as e:
+            print(f"[放置位置识别] 颜色区域识别失败: {e}")
+
+    # 两阶段识别
+    if reference_object and direction:
+        print(f"[放置位置识别] 第一阶段：识别参考物体 '{reference_object}'...")
+
+        # 为常见物体添加英文和描述性提示
+        object_hints = {
+            "显微镜": "显微镜/microscope (黑色的光学设备，有目镜和物镜，通常在桌面上)",
+            "机械臂": "机械臂/robot arm (银色或灰色的机械手臂)",
+            "桌子": "桌子/table (工作台面)",
+        }
+        search_hint = object_hints.get(reference_object, reference_object)
+
+        # 使用多视角图像（如果有）
+        if extra_images and len(extra_images) > 0:
+            stage1_prompt = f"""这是从多个角度拍摄的场景图像（水平拼接）。
+请在图像中找到 "{search_hint}" 并返回其在【第一张图（最左边）】中的位置。
+
+【重要提示】
+- 图像是多个视角的拼接，请综合所有视角来识别物体
+- 显微镜通常是黑色的光学设备，有圆柱形的镜筒
+- 返回的坐标必须是在第一张图（最左边，宽度约{w}像素）中的位置
+
+第一张图尺寸: {w} x {h} 像素。
+只返回JSON：{{"found": true, "bbox": [x1,y1,x2,y2], "center": [cx,cy]}}
+如果确实找不到返回：{{"found": false}}"""
+            image_for_vlm = combined_image
+        else:
+            stage1_prompt = f"""请在图像中找到 "{search_hint}" 并返回其边界框和中心点。
+
+【重要提示】
+- 仔细观察整个图像
+- 显微镜通常是黑色的光学设备，有圆柱形的镜筒
+- 如果看到类似的设备，请标记它的位置
+
+图像尺寸: {w} x {h} 像素。
+只返回JSON：{{"found": true, "bbox": [x1,y1,x2,y2], "center": [cx,cy]}}
+如果确实找不到返回：{{"found": false}}"""
+            image_for_vlm = global_image
+
+        messages = [{"role": "system", "content": stage1_prompt}]
+        base64_img = encode_np_array(image_for_vlm)
+        messages.append({"role": "user", "content": [
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}},
+            {"type": "text", "text": f"请找到图像中的 {search_hint}"}
+        ]})
+
+        try:
+            completion = client.chat.completions.create(
+                model="qwen-vl-max-latest", messages=messages, temperature=0.1)
+            content = completion.choices[0].message.content
+            print(f"[放置位置识别] 第一阶段响应: {content}")
+
+            json_match = re.search(r'(\{.*\})', content, re.DOTALL)
+            if json_match:
+                result = json.loads(json_match.group(1))
+                if result.get("found") and "center" in result:
+                    ref_x, ref_y = result["center"]
+                    print(f"[放置位置识别] 找到 '{reference_object}' 在 ({ref_x}, {ref_y})")
+
+                    # 使用解析出的偏移量
+                    if direction == "左边":
+                        place_x, place_y = ref_x - pixel_offset, ref_y
+                    elif direction == "右边":
+                        place_x, place_y = ref_x + pixel_offset, ref_y
+                    elif direction in ["上面", "前面"]:
+                        place_x, place_y = ref_x, ref_y - pixel_offset
+                    elif direction in ["下面", "后面"]:
+                        place_x, place_y = ref_x, ref_y + pixel_offset
+                    else:
+                        place_x, place_y = ref_x + pixel_offset, ref_y
+
+                    place_x = max(0, min(w-1, int(place_x)))
+                    place_y = max(0, min(h-1, int(place_y)))
+
+                    return {
+                        "place_point": [place_x, place_y],
+                        "confidence": 0.9,
+                        "reason": f"'{reference_object}'在({ref_x},{ref_y})，{direction}偏移{pixel_offset}像素",
+                        "reference_position": [ref_x, ref_y]
+                    }
+        except Exception as e:
+            print(f"[放置位置识别] 第一阶段失败: {e}")
+
+    # 回退到单阶段识别
+    print(f"[放置位置识别] 使用单阶段识别...")
+    system_prompt = f"""你是机器人视觉系统。用户想把物体放到：{place_description}
+
+【图像信息】
+- 图像尺寸: {w} x {h} 像素
+- 坐标系: 左上角(0,0)，x向右增大，y向下增大
+
+【识别提示】
+- 如果描述中包含颜色（红色、绿色、蓝色等），请找到桌面上对应颜色的标记区域
+- 如果描述中包含参考物体（如显微镜），请先找到该物体，再确定相对位置
+- 显微镜通常是黑色的光学设备，有圆柱形的镜筒
+- 桌面上可能有彩色的标记区域（红色、绿色等）
+
+请返回JSON格式：{{"place_point": [x, y], "confidence": 0.9, "reason": "原因"}}"""
+
+    messages = [{"role": "system", "content": system_prompt}]
+    base64_img = encode_np_array(global_image)
+    messages.append({"role": "user", "content": [
+        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{base64_img}"}},
+        {"type": "text", "text": f"放置位置：{place_description}"}
+    ]})
+
+    try:
+        completion = client.chat.completions.create(
+            model="qwen-vl-max-latest", messages=messages, temperature=0.1)
+        content = completion.choices[0].message.content
+        print(f"[放置位置识别] 响应: {content}")
+
+        json_match = re.search(r'(\{.*\})', content, re.DOTALL)
+        if json_match:
+            result = json.loads(json_match.group(1))
+            if "place_point" in result:
+                x, y = result["place_point"]
+                result["place_point"] = [max(0,min(w-1,int(x))), max(0,min(h-1,int(y)))]
+            return result
+    except Exception as e:
+        print(f"[放置位置识别] 失败: {e}")
+
+    return None
+
+
+def pixel_to_world(pixel_x, pixel_y, depth_img, T_wc, fovy, img_shape):
+    """
+    将像素坐标转换为世界坐标。
+
+    参数:
+        pixel_x, pixel_y: 像素坐标
+        depth_img: 深度图像
+        T_wc: 相机到世界的变换矩阵 (spatialmath.SE3)
+        fovy: 垂直视场角 (弧度)
+        img_shape: 图像尺寸 (height, width)
+
+    返回:
+        world_point: [x, y, z] 世界坐标
+    """
+    height, width = img_shape[:2]
+
+    # 计算相机内参
+    focal = height / (2.0 * np.tan(fovy / 2.0))
+    cx = width / 2.0
+    cy = height / 2.0
+
+    # 获取深度值
+    depth = depth_img[int(pixel_y), int(pixel_x)]
+
+    if depth <= 0 or np.isnan(depth) or np.isinf(depth):
+        print(f"[警告] 深度值无效: {depth}，使用默认桌面高度")
+        # 假设桌面高度为0.74m，相机高度约3m
+        depth = 2.5  # 估计深度
+
+    # 反投影到相机坐标系
+    x_c = (pixel_x - cx) * depth / focal
+    y_c = (pixel_y - cy) * depth / focal
+    z_c = depth
+
+    # 转换到世界坐标系
+    point_camera = np.array([x_c, y_c, z_c, 1.0])
+    point_world = T_wc.A @ point_camera
+
+    return point_world[:3]
+
+
 # ----------------------- 基础工具函数 -----------------------
 
 def encode_np_array(image_np):
@@ -65,7 +486,7 @@ def generate_robot_actions(user_command, image_input=None):
     # 初始化OpenAI客户端，彻底禁用环境代理 (trust_env=False)
     # 替换为自己的模型调用，没有本地部署的，可以参考该网站 https://sg.uiuiapi.com/v1
     client = OpenAI(
-        api_key='OPENAI_API_KEY', 
+        api_key='sk-3d29c129d0664685853e5311a2241127', 
         base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
         http_client=httpx.Client(trust_env=False)
     )       

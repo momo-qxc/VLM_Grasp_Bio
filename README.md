@@ -2,10 +2,12 @@
 
 [中文](README-cn.md)
 
-A vision‑language‑model (VLM) driven robotic grasping and placing demo. The project simulates a UR5e arm in MuJoCo and uses **text commands + VLM segmentation + point‑cloud grasp inference** to pick and place target objects. It supports **single‑camera** and **dual‑camera fusion** modes.
+A vision‑language‑model (VLM) driven robotic grasping and placing demo. The project simulates a UR5e arm in MuJoCo and uses **fully natural language instructions + VLM segmentation + point‑cloud grasp inference** to pick and place target objects. It supports **single‑camera**, **dual‑camera fusion**, and **intelligent placement** modes with end‑to‑end natural language control.
 
 ## Features
-- **VLM target grounding**: natural language command → 2D bounding box of the target.
+- **Full natural language control**: complete instructions like "Place the petri dish to the right of the microscope" for end‑to‑end grasping and placement.
+- **VLM target grounding**: natural language command → 2D bounding box of the target object.
+- **Intelligent placement detection**: VLM identifies placement positions from multi‑camera views based on spatial descriptions.
 - **Grasp pose inference**: depth + mask → GraspNet inference.
 - **Dual‑camera fusion**: table + shelf cameras merged to improve occlusion robustness.
 - **Execution & placing**: auto‑leveling and approach compensation to reduce collisions.
@@ -94,15 +96,33 @@ python main_vlm.py
 Select a mode:
 - `1`: single camera (table `cam`)
 - `2`: single camera (shelf `cam_shelf`)
-- `3`: dual‑camera fusion (recommended)
+- `3`: dual‑camera fusion (recommended for occluded scenes)
+- `4`: **intelligent placement mode** 🔥 - full natural language control for grasping and placing
 
-In fusion mode, you will be prompted for a **natural language command** for the target object, then VLM segmentation and grasp inference run.
+### Mode 4: Intelligent Placement
+In this mode, you can provide complete natural language instructions such as:
+- "Place the petri dish to the right of the microscope"
+- "Move the test tube to the upper left corner of the table"
+- "Grasp the beaker and put it in the red area"
+
+The system will:
+1. Parse the instruction to extract grasp target and placement description
+2. Use VLM to segment the target object from the table camera
+3. Infer grasp pose using GraspNet
+4. Use multi‑camera views (global cameras) to identify the placement position
+5. Execute the complete pick‑and‑place task
+
+In fusion mode (mode 3), you will be prompted for a **natural language command** for the target object, then VLM segmentation and grasp inference run.
 
 ## Demo
 
-UI snapshot:
+UI snapshot (Mode selection):
 
 ![UI](Visual%20results/交互界面.png)
+
+UI snapshot (Intelligent placement mode):
+
+![UI2](Visual%20results/交互界面2.png)
 
 Fused point cloud:
 

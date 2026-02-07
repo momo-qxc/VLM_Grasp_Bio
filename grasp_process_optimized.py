@@ -157,7 +157,7 @@ def get_and_process_data(color_path, depth_path, mask_path, fovy=np.pi/4):
 
     # mask = depth < 2.0
     # mask = (workspace_mask > 0) & (depth < 2.0)
-    mask = (workspace_mask > 0) & (depth < 2.0) & (depth > 0.1) 
+    mask = (workspace_mask > 0) & (depth < 2.0) & (depth > 0.1)
     cloud_masked = cloud[mask]
     color_masked = color[mask]
     # print(f"mask过滤后的点云数量 (color_masked): {len(color_masked)}") # 在采样前打印原始过滤后的点数
@@ -171,7 +171,7 @@ def get_and_process_data(color_path, depth_path, mask_path, fovy=np.pi/4):
         idxs1 = np.arange(len(cloud_masked))
         idxs2 = np.random.choice(len(cloud_masked), NUM_POINT - len(cloud_masked), replace=True)
         idxs = np.concatenate([idxs1, idxs2], axis=0)
-    
+
     cloud_sampled = cloud_masked[idxs]
     color_sampled = color_masked[idxs] # 提取点云和颜色
 
@@ -691,7 +691,7 @@ def _execute_planner_sequence(env, robot, planner_array, time_array, gripper_ctr
 
 
 # ================= 仿真执行抓取动作 ====================
-def execute_grasp(env, gg, T_wc=None):
+def execute_grasp(env, gg, T_wc=None, target_pos=None):
 
     """
     执行抓取动作，控制机器人从初始位置移动到抓取位置，并完成抓取操作。
@@ -700,6 +700,7 @@ def execute_grasp(env, gg, T_wc=None):
     env (UR5GraspEnv): 机器人环境对象。
     gg (GraspGroup): 抓取预测结果。
     T_wc (sm.SE3): 世界坐标系到相机坐标系的变换矩阵。
+    target_pos (list): 放置位置 [x, y, z]，如果为None则使用默认位置。
     """
     robot = env.robot
     T_wb = robot.base
@@ -957,28 +958,68 @@ def execute_grasp(env, gg, T_wc=None):
 
 
     # 5.2 关节空间安全中转 (Joint Space Transit)
-    # 定义最终放置位置 (可随意修改)
+    # 定义最终放置位置
     # target_pos = [x, y, place_height]
     # place_height: 放置时松开夹爪的高度（机械臂下降到此高度后松开）
-    # target_pos = [1.4, 0.5, 0.02]
-    target_pos = [0.2, 0.2, 0.92]  # 测试背后位置，放置高度2cm
+    if target_pos is None:
+        # 使用默认放置位置
+        target_pos = [0.2, 0.2, 0.92]  # 默认背后位置
+        print(f"[PLACE] 使用默认放置位置: {target_pos}")
+    else:
+        print(f"[PLACE] 使用指定放置位置: {target_pos}")
 
     # 放置后抬升高度（单独配置，不在target_pos中）
     lift_height_after_place = 0.35  # 松开后抬升15cm到安全高度
 
-    # 策略判断：是去"背后"还是"侧面"？
-    is_going_back = (target_pos[0] < 0.5 and target_pos[1] < 0.5)
+    # 策略判断：根据放置位置选择合适的搬运策略
+    # 机械臂基座大约在 (0, 0) 位置，货架在 x > 1.6 的位置
+    #
+    # 区域划分（俯视图）：
+    #        Y轴
+    #        ^
+    #   1.2  +------------------+
+    #        |   左后方区域      |  (需要转身，关节空间)
+    #        |   x<0.5, y>0.5   |
+    #   0.5  +--------+---------+
+    #        | 背后   | 中间区域 |  侧面/货架方向
+    #        | x<0.5  | 0.5<=x  |  x>=1.2
+    #        | y<0.5  | <1.2    |  (保持原姿态)
+    #   0    +--------+---------+-----> X轴
+    #        0       0.5       1.2
+    #
+    # 简化逻辑：只要 x < 0.5，就需要转身，使用关节空间插值
 
-    if is_going_back:
-        # 【去背后 (0.2, 0.2)】：需要大角度旋转，且容易碰到奇异点
-        # 目标姿态：朝下朝后（机械臂翻转，但我们会在执行时动态补偿腕部旋转）
-        T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_lift.t[2]) * sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)
+    needs_turn_around = (target_pos[0] < 0.5)  # x < 0.5 需要转身
+    is_middle_area = (0.5 <= target_pos[0] < 1.2 and not needs_turn_around)
+    is_side_area = (target_pos[0] >= 1.2)  # 货架方向
+
+    print(f"[PLACE] 位置分析: x={target_pos[0]:.2f}, y={target_pos[1]:.2f}")
+    print(f"[PLACE] 区域判断: needs_turn_around={needs_turn_around}, is_middle_area={is_middle_area}, is_side_area={is_side_area}")
+
+    # 根据区域选择姿态和策略
+    if needs_turn_around:
+        print(f"[PLACE] 检测到需要转身的区域（x<0.5），使用关节空间插值")
+        place_rotation_se3 = sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)
+        use_joint_transit_strategy = True
+    elif is_middle_area:
+        print(f"[PLACE] 检测到中间区域放置，将使用垂直向下姿态")
+        place_rotation_se3 = sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)
         use_joint_transit_strategy = True
     else:
+        print(f"[PLACE] 检测到侧面/货架方向，保持原姿态")
+        place_rotation_se3 = sm.SE3(grasp_rotation)
+        use_joint_transit_strategy = False
+
+    if needs_turn_around:
+        # 【需要转身】：使用垂直向下姿态
+        T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_lift.t[2]) * sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)
+    elif is_middle_area:
+        # 【去中间区域】：使用垂直向下姿态
+        T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_lift.t[2]) * place_rotation_se3
+    else:
         # 【去侧面/前方 (1.4, 0.3)】：不需要转身，直接平移
-        # 目标姿态：保持抓取时的姿态 (grasp_rotation)
+        # 目标姿态：保持抓取时的姿态 (grasp_rotation 已经是 SO3)
         T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_lift.t[2]) * sm.SE3(grasp_rotation)
-        use_joint_transit_strategy = False # 侧面直接走直线 Cartesian 即可
 
     
     # 获取当前的关节角度
@@ -992,21 +1033,24 @@ def execute_grasp(env, gg, T_wc=None):
     time_transit = 2.0
 
     if use_joint_transit_strategy:
-        # === 策略A：去背后 (复杂模式) ===
-        # 优先尝试关节插值，失败则回退到了 Waypoint
-        
+        # === 策略A：去背后或中间区域 (复杂模式) ===
+        # 优先尝试关节插值，失败则回退到 Waypoint
+
         # 1. 尝试计算关节目标
         q_target = robot.ikine(T_target_high)
-        
+
         if len(q_target) > 0:
-            # IK成功：直接转底座 (这种最顺滑)
-            print(f"去背后：IK成功，使用关节空间插值。")
+            # IK成功：直接使用关节空间插值
+            strategy_name = "需要转身" if needs_turn_around else "中间区域"
+            print(f"去{strategy_name}：IK成功，使用关节空间插值。")
             traj_transit = TrajectoryParameter(JointParameter(q_start, q_target), QuinticVelocityParameter(time_transit))
             planner_transit = TrajectoryPlanner(traj_transit)
         else:
             # IK失败：启用安全中转点 fallback
-            print(f"去背后：IK失败，启用安全中转点策略 (0.8, 0.1)。")
+            strategy_name = "需要转身" if needs_turn_around else "中间区域"
+            print(f"去{strategy_name}：IK失败，启用安全中转点策略 (0.8, 0.1)。")
             time_transit = 3.0
+            # 使用垂直向下姿态作为中转点姿态
             T_waypoint = sm.SE3.Trans(0.8, 0.1, T_lift.t[2]) * sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)
             
             # Lift -> Waypoint (边走边转)
@@ -1060,9 +1104,9 @@ def execute_grasp(env, gg, T_wc=None):
         T_after_lift = robot.get_cartesian()
 
         # === 平移到目标上方 ===
-        if is_going_back:
-            print("  [SHELF] 放置目标在背后，使用关节空间搬运策略...")
-            # 目标姿态：朝下朝后
+        if needs_turn_around:
+            print("  [SHELF] 放置目标需要转身（x<0.5），使用关节空间搬运策略...")
+            # 目标姿态：垂直向下
             T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_after_lift.t[2]) * sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)
 
             # 使用 IK 计算关节角
@@ -1085,15 +1129,83 @@ def execute_grasp(env, gg, T_wc=None):
                  # 保持抓取姿态，不使用翻转后的姿态
                  final_rotation = grasp_rotation
             else:
-                 print("  [SHELF] [WARNING] 背后目标点 IK 失败，尝试保持原姿态...")
-                 T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_after_lift.t[2]) * sm.SE3(grasp_rotation)
-                 time_move = 2.0
-                 pos_move = LinePositionParameter(T_after_lift.t, T_target_high.t)
-                 att_move = OneAttitudeParameter(grasp_rotation, grasp_rotation)
-                 traj_move = TrajectoryParameter(CartesianParameter(pos_move, att_move), QuinticVelocityParameter(time_move))
+                 print("  [SHELF] [WARNING] 目标点 IK 失败，尝试使用中转点...")
+                 # 使用安全中转点
+                 T_waypoint = sm.SE3.Trans(0.5, 0.5, T_after_lift.t[2]) * sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)
+                 q_waypoint = robot.ikine(T_waypoint)
+
+                 if len(q_waypoint) > 0:
+                     # 先移动到中转点
+                     time_move = 2.0
+                     param_move1 = JointParameter(q_now, q_waypoint)
+                     traj_move1 = TrajectoryParameter(param_move1, QuinticVelocityParameter(time_move))
+                     planner_move1 = TrajectoryPlanner(traj_move1)
+                     _execute_planner_sequence_with_compensation(
+                         env, robot, [planner_move1], [0.0, time_move],
+                         gripper_ctrl=255,
+                         keep_level=True,
+                         initial_grasp_rotation=sm.SE3(grasp_rotation)
+                     )
+
+                     # 再从中转点移动到目标
+                     q_now2 = robot.get_joint()
+                     q_target2 = robot.ikine(T_target_high)
+                     if len(q_target2) > 0:
+                         param_move2 = JointParameter(q_now2, q_target2)
+                         traj_move2 = TrajectoryParameter(param_move2, QuinticVelocityParameter(time_move))
+                         planner_move2 = TrajectoryPlanner(traj_move2)
+                         _execute_planner_sequence_with_compensation(
+                             env, robot, [planner_move2], [0.0, time_move],
+                             gripper_ctrl=255,
+                             keep_level=True,
+                             initial_grasp_rotation=sm.SE3(grasp_rotation)
+                         )
+                 final_rotation = grasp_rotation
+
+        elif is_middle_area:
+            print("  [SHELF] 放置目标在中间区域，使用关节空间搬运策略（垂直向下姿态）...")
+            # 目标姿态：垂直向下
+            T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_after_lift.t[2]) * place_rotation_se3
+
+            # 使用 IK 计算关节角
+            q_now = robot.get_joint()
+            q_target = robot.ikine(T_target_high)
+
+            if len(q_target) > 0:
+                 time_move = 3.0
+                 param_move = JointParameter(q_now, q_target)
+                 traj_move = TrajectoryParameter(param_move, QuinticVelocityParameter(time_move))
                  planner_move = TrajectoryPlanner(traj_move)
                  _execute_planner_sequence(env, robot, [planner_move], [0.0, time_move], gripper_ctrl=255)
-                 final_rotation = grasp_rotation
+                 final_rotation = (sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)).R
+            else:
+                 print("  [SHELF] [WARNING] 中间区域目标点 IK 失败，尝试使用中转点...")
+                 # 使用安全中转点
+                 T_waypoint = sm.SE3.Trans(0.8, 0.5, T_after_lift.t[2]) * place_rotation_se3
+                 q_waypoint = robot.ikine(T_waypoint)
+
+                 if len(q_waypoint) > 0:
+                     # 先移动到中转点
+                     time_move = 2.0
+                     param_move1 = JointParameter(q_now, q_waypoint)
+                     traj_move1 = TrajectoryParameter(param_move1, QuinticVelocityParameter(time_move))
+                     planner_move1 = TrajectoryPlanner(traj_move1)
+                     _execute_planner_sequence(env, robot, [planner_move1], [0.0, time_move], gripper_ctrl=255)
+
+                     # 再从中转点移动到目标
+                     T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_after_lift.t[2]) * place_rotation_se3
+                     q_now2 = robot.get_joint()
+                     q_target2 = robot.ikine(T_target_high)
+                     if len(q_target2) > 0:
+                         param_move2 = JointParameter(q_now2, q_target2)
+                         traj_move2 = TrajectoryParameter(param_move2, QuinticVelocityParameter(time_move))
+                         planner_move2 = TrajectoryPlanner(traj_move2)
+                         _execute_planner_sequence(env, robot, [planner_move2], [0.0, time_move], gripper_ctrl=255)
+                     final_rotation = (sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)).R
+                 else:
+                     print("  [SHELF] [ERROR] 中转点 IK 也失败，使用默认放置位置...")
+                     final_rotation = grasp_rotation
+
         else:
             print("  [SHELF] 放置目标在侧面/前方，使用笛卡尔直线搬运...")
             T_target_high = sm.SE3.Trans(target_pos[0], target_pos[1], T_after_lift.t[2]) * sm.SE3(grasp_rotation)
@@ -1108,7 +1220,11 @@ def execute_grasp(env, gg, T_wc=None):
         # === 下降放置 ===
         time_drop = 2.5  # 增加下降时间，实现更平缓的放置
         # 下降到用户指定的放置高度（target_pos[2]）
-        T_drop = sm.SE3.Trans(target_pos[0], target_pos[1], target_pos[2]) * sm.SE3(final_rotation)
+        # final_rotation 可能是 SO3 对象或旋转矩阵，需要统一处理
+        if isinstance(final_rotation, np.ndarray):
+            T_drop = sm.SE3.Trans(target_pos[0], target_pos[1], target_pos[2]) * sm.SE3(sm.SO3(final_rotation))
+        else:
+            T_drop = sm.SE3.Trans(target_pos[0], target_pos[1], target_pos[2]) * sm.SE3(final_rotation)
 
         # 重新获取当前位置作为 LineStart
         T_current_high = robot.get_cartesian()
@@ -1120,7 +1236,7 @@ def execute_grasp(env, gg, T_wc=None):
         planner_drop2 = TrajectoryPlanner(traj_drop2)
 
         # 下降时也启用水平保持
-        if is_going_back:
+        if needs_turn_around:
             _execute_planner_sequence_with_compensation(
                 env, robot, [planner_drop2], [0.0, time_drop],
                 gripper_ctrl=255,
@@ -1149,7 +1265,7 @@ def execute_grasp(env, gg, T_wc=None):
         att_up = OneAttitudeParameter(sm.SO3(T_cur.R), sm.SO3(T_up.R))
         traj_up = TrajectoryParameter(CartesianParameter(pos_up, att_up), QuinticVelocityParameter(time_up))
         planner_up = TrajectoryPlanner(traj_up)
-        _execute_planner_sequence(env, robot, [planner_up], [0.0, time_up], gripper_ctrl=255)
+        _execute_planner_sequence(env, robot, [planner_up], [0.0, time_up], gripper_ctrl=0)  # 保持夹爪打开
 
         # 2) 从当前关节角用关节空间插值回到初始姿态 q0
         q_now = robot.get_joint()
@@ -1157,7 +1273,7 @@ def execute_grasp(env, gg, T_wc=None):
         param_back = JointParameter(q_now, q0)
         traj_back = TrajectoryParameter(param_back, QuinticVelocityParameter(time_back))
         planner_back = TrajectoryPlanner(traj_back)
-        _execute_planner_sequence(env, robot, [planner_back], [0.0, time_back], gripper_ctrl=255)
+        _execute_planner_sequence(env, robot, [planner_back], [0.0, time_back], gripper_ctrl=0)  # 保持夹爪打开
 
         print("  [SHELF] 抓取、放置及复原完成！")
         return
@@ -1172,8 +1288,8 @@ def execute_grasp(env, gg, T_wc=None):
          time_array = [0.0, time4, time_lift, time_transit, time6]
          planner_array = [planner4, planner_lift, planner_transit, planner6]
 
-    # 判断是否需要启用水平保持补偿（去背后时）
-    if is_going_back:
+    # 判断是否需要启用水平保持补偿（需要转身时）
+    if needs_turn_around:
         print("  [TABLE] 桌面抓取去背后，启用水平保持补偿...")
         # 使用带补偿的执行函数
         _execute_planner_sequence_with_compensation(
@@ -1213,6 +1329,7 @@ def execute_grasp(env, gg, T_wc=None):
 
     # 7.抬起夹爪
     # 目标：放置后抬起夹爪到安全高度，避免碰撞物体。
+    # 注意：保持夹爪打开
     time7 = 1.5  # 增加抬升时间
     T7 = sm.SE3.Trans(0.0, 0.0, lift_height_after_place) * T6  # 使用用户配置的抬升高度
     position_parameter7 = LinePositionParameter(T6.t, T7.t)
@@ -1241,11 +1358,13 @@ def execute_grasp(env, gg, T_wc=None):
                     robot.move_cartesian(planner_interpolate)
                     joint = robot.get_joint()
                 action[:6] = joint
+                action[-1] = 0  # 保持夹爪打开
                 env.step(action)
                 break
 
     # 8.回到初始位置
     # 目标：机器人返回初始姿态（q0），完成整个任务。
+    # 注意：保持夹爪打开，避免重新抓起物品
     time8 = 1
     q8 = robot.get_joint()
     q9 = q0
@@ -1273,5 +1392,6 @@ def execute_grasp(env, gg, T_wc=None):
                     robot.move_cartesian(planner_interpolate)
                     joint = robot.get_joint()
                 action[:6] = joint
+                action[-1] = 0  # 保持夹爪打开
                 env.step(action)
                 break
