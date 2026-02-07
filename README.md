@@ -140,9 +140,12 @@ Placed:
 
 ![Placed](Visual%20results/放置完成.png)
 
+Natural Language Position Recognition (Blue: Reference Object; Red: Placement Point)：
+![Natural Language Position Recognition](debug_place_position.jpg)
+
 Video:
 
-<video src="Visual%20results/video.webm" controls></video>
+<video src="Visual%20results/video.mp4" controls></video>
 
 ## Reference
 - Environment setup reference: `https://blog.csdn.net/agentssl/article/details/148089323`
