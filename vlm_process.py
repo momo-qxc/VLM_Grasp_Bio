@@ -32,6 +32,9 @@ logging.getLogger("ultralytics").setLevel(logging.WARNING)
 from google import genai
 from google.genai import types
 
+# 导入全局配置
+from config import Config
+
 
 # ----------------------- 指令解析与放置位置识别 -----------------------
 
@@ -47,8 +50,8 @@ def parse_instruction(user_input, image_input=None):
     }
     """
     client = OpenAI(
-        api_key='sk-3d29c129d0664685853e5311a2241127',
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key=Config.QWEN_API_KEY,
+        base_url=Config.QWEN_BASE_URL,
         http_client=httpx.Client(trust_env=False)
     )
 
@@ -88,9 +91,9 @@ def parse_instruction(user_input, image_input=None):
 
     try:
         completion = client.chat.completions.create(
-            model="qwen-vl-max-latest",
+            model=Config.QWEN_MODEL,
             messages=messages,
-            temperature=0.1,
+            temperature=Config.DEFAULT_TEMPERATURE,
         )
 
         content = completion.choices[0].message.content
@@ -130,8 +133,8 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
         extra_images: 额外的相机图像列表 (可选，用于辅助识别)
     """
     client = OpenAI(
-        api_key='sk-3d29c129d0664685853e5311a2241127',
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key=Config.QWEN_API_KEY,
+        base_url=Config.QWEN_BASE_URL,
         http_client=httpx.Client(trust_env=False)
     )
 
@@ -268,7 +271,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
 
         try:
             completion = client.chat.completions.create(
-                model="qwen-vl-max-latest", messages=messages, temperature=0.1)
+                model=Config.QWEN_MODEL, messages=messages, temperature=Config.DEFAULT_TEMPERATURE)
             content = completion.choices[0].message.content
             print(f"[放置位置识别] 颜色区域识别响应: {content}")
 
@@ -336,7 +339,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
 
         try:
             completion = client.chat.completions.create(
-                model="qwen-vl-max-latest", messages=messages, temperature=0.1)
+                model=Config.QWEN_MODEL, messages=messages, temperature=Config.DEFAULT_TEMPERATURE)
             content = completion.choices[0].message.content
             print(f"[放置位置识别] 第一阶段响应: {content}")
 
@@ -396,7 +399,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
 
     try:
         completion = client.chat.completions.create(
-            model="qwen-vl-max-latest", messages=messages, temperature=0.1)
+            model=Config.QWEN_MODEL, messages=messages, temperature=0.1)
         content = completion.choices[0].message.content
         print(f"[放置位置识别] 响应: {content}")
 
@@ -486,8 +489,8 @@ def generate_robot_actions(user_command, image_input=None):
     # 初始化OpenAI客户端，彻底禁用环境代理 (trust_env=False)
     # 替换为自己的模型调用，没有本地部署的，可以参考该网站 https://sg.uiuiapi.com/v1
     client = OpenAI(
-        api_key='sk-3d29c129d0664685853e5311a2241127', 
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        api_key=Config.QWEN_API_KEY,
+        base_url=Config.QWEN_BASE_URL,
         http_client=httpx.Client(trust_env=False)
     )       
     system_prompt = textwrap.dedent("""\
@@ -535,7 +538,7 @@ def generate_robot_actions(user_command, image_input=None):
     try:
         # 使用OpenAI客户端调用API
         completion = client.chat.completions.create(
-            model="qwen-vl-max-latest", 
+            model=Config.QWEN_MODEL, 
             # model="gpt-5.2-2025-12-11",  # 指定模型名称，请确认服务提供商支持的模型名
             # qwen3-omni-flash"
             # model="qwen-vl-plus",
@@ -544,7 +547,7 @@ def generate_robot_actions(user_command, image_input=None):
             # model="qwen2.5-vl-32b-instruct",
             messages=messages,
             # max_tokens=4096,  # 可根据需要调整
-            temperature=0.1,   # 降低温度以提高输出的确定性，对结构化输出有益
+            temperature=Config.DEFAULT_TEMPERATURE,   # 降低温度以提高输出的确定性，对结构化输出有益
         )
         
         content = completion.choices[0].message.content
@@ -580,8 +583,8 @@ def generate_robot_actions_gemini(user_command, image_input=None):
     使用与原 Qwen/OpenAI 相同的提示词逻辑，但适配 Gemini 的输入输出。
     """
     # 替换为用户的 API Key
-    client = genai.Client(api_key='AIzaSyBJvmAHO92kO4t0zKo7sqrtrnk9jmR3HRk')
-    MODEL_ID = "gemini-robotics-er-1.5-preview"
+    client = genai.Client(api_key=Config.GEMINI_API_KEY)
+    MODEL_ID = Config.GEMINI_MODEL
 
     if image_input is None:
         return {"response": "需要图像输入", "coordinates": {}}
