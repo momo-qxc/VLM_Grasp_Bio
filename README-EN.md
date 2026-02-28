@@ -306,8 +306,7 @@ Final placement result in the GUI:
 
 ### 8.4 Demo videos
 
-- [演示效果.webm](Visual%20results/演示效果.webm)
-- [mujoco运行效果.webm](Visual%20results/mujoco运行效果.webm)
+- [Demo videos.webm](Visual%20results/演示效果.webm)
 
 ## 9. FAQ
 

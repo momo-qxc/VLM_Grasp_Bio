@@ -302,8 +302,7 @@ UI 界面中的放置结果：
 
 ### 8.4 演示视频
 
-- [演示效果.webm](Visual%20results/演示效果.webm)
-- [mujoco运行效果.webm](Visual%20results/mujoco运行效果.webm)
+- [演示效果.webm](video/演示效果.webm)
 
 ## 9. 常见问题
 

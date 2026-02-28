@@ -2,4 +2,4 @@ sam_b.pt
 __pycache__/
 *.pyc
 .env
-video/
+video/mujoco运行效果.mp4
