@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="microscope">
+    <compiler angle="radian" meshdir="." texturedir="textures"/>
+
+    <default>
+        <default class="microscope">
+            <geom conaffinity="1" contype="1" group="1"/>
+        </default>
+        <default class="microscope_visual">
+            <geom conaffinity="0" contype="0" group="2"/>
+        </default>
+        <default class="microscope_collision">
+            <geom conaffinity="1" condim="3" contype="1" group="3" margin="0.001"/>
+        </default>
+    </default>
+
+    <asset>
+        <!-- Mesh asset - using the new textured model -->
+        <mesh name="microscope_mesh" file="microscope_textured.obj" scale="1 1 1"/>
+        
+        <!-- Texture assets -->
+        <texture name="microscope_albedo" type="2d" file="Microscope_AlbedoTransparency.png"/>
+        <texture name="microscope_normal" type="2d" file="Microscope_Normal.png"/>
+        
+        <!-- Material with texture -->
+        <material name="microscope_material" texture="microscope_albedo" texrepeat="1 1" specular="0.3" shininess="0.5"/>
+    </asset>
+
+    <worldbody>
+        <body name="microscope" pos="0 0 0">
+            <!-- Visual mesh with texture -->
+            <geom class="microscope_visual" type="mesh" mesh="microscope_mesh" material="microscope_material"/>
+            <!-- Simplified collision geometry -->
+            <!-- Base -->
+            <geom class="microscope_collision" type="box" size="0.2 0.2 0.05" pos="0 0 0.05" rgba="0.15 0.15 0.18 0.3"/>
+            <!-- Main body/arm -->
+            <geom class="microscope_collision" type="box" size="0.08 0.1 0.25" pos="0 0.1 0.3" rgba="0.15 0.15 0.18 0.3"/>
+            <!-- Head -->
+            <geom class="microscope_collision" type="box" size="0.1 0.15 0.1" pos="0 -0.05 0.5" rgba="0.15 0.15 0.18 0.3"/>
+        </body>
+    </worldbody>
+
+</mujoco>

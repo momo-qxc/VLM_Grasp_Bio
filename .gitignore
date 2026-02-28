@@ -1,0 +1,5 @@
+sam_b.pt
+__pycache__/
+*.pyc
+.env
+video/

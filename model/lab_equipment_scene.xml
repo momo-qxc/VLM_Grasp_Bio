@@ -1,0 +1,85 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="lab_equipment_scene">
+    <compiler angle="radian" />
+    
+    <!-- Increased iterations for better contact stability -->
+    <option gravity="0 0 -9.81" timestep="0.002" integrator="implicitfast" solver="Newton" 
+            cone="elliptic" noslip_iterations="5" iterations="100" tolerance="1e-10"/>
+    
+    <visual>
+        <headlight ambient="0.4 0.4 0.4" diffuse="0.8 0.8 0.8" specular="0.3 0.3 0.3"/>
+        <quality shadowsize="4096"/>
+        <global azimuth="135" elevation="-15"/>
+    </visual>
+    
+    <!-- Camera for FoundationPose rendering - looking at microscope location -->
+    <worldbody>
+        <camera name="track_cam" pos="1.0 0.8 2.0" mode="targetbodycom" target="microscope" fovy="45"/>
+    </worldbody>
+
+    <default>
+        <default class="visual">
+            <geom conaffinity="0" contype="0" group="2"/>
+        </default>
+    </default>
+
+    <asset>
+        <!-- Metal shelf mesh - scale by 0.01 to convert cm to m -->
+        <mesh name="metal_shelf_mesh" file="metal_shelf_01/eb_metal_shelf_01.obj" scale="0.01 0.01 0.01"/>
+        <material name="shelf_metal" rgba="0.7 0.7 0.75 1" metallic="0.8" roughness="0.3" />
+        
+        <!-- Microscope mesh - scale 0.7 for ~30cm height -->
+        <mesh name="microscope_mesh" file="microscope/microscope_textured.obj" scale="0.7 0.7 0.7"/>
+        <mesh name="microscope_convex" file="microscope/microscope_convex.obj" scale="0.7 0.7 0.7"/>
+        
+        <!-- Microscope texture and material -->
+        <texture name="microscope_albedo" type="2d" file="microscope/textures/Microscope_AlbedoTransparency.png"/>
+        <material name="microscope_material" texture="microscope_albedo" texrepeat="1 1" specular="0.3" shininess="0.5"/>
+        
+        <!-- Ground texture -->
+        <texture name="grid" type="2d" builtin="checker" rgb1="0.1 0.2 0.3" rgb2="0.2 0.3 0.4" width="512" height="512"/>
+        <material name="grid" texture="grid" texrepeat="8 8" reflectance="0.1"/>
+    </asset>
+
+    <worldbody>
+        <!-- Light -->
+        <light pos="0 0 3" dir="0 0 -1" directional="true" castshadow="true"/>
+        
+        <!-- Ground plane - infinite -->
+        <geom name="floor" type="plane" size="0 0 0.05" material="grid" conaffinity="1" contype="1"/>
+        
+        <!-- Metal Shelf - Visual only (rotated) -->
+        <body name="metal_shelf" pos="0 0 0" euler="1.5708 0 0">
+            <geom name="shelf_visual" class="visual" type="mesh" mesh="metal_shelf_mesh" material="shelf_metal"/>
+        </body>
+        
+        <!-- Shelf collision - simple horizontal boxes at exact world coordinates -->
+        <!-- Using quat="1 0 0 0" to ensure perfectly horizontal -->
+        <!-- friction="2 0.5 0.001" = high sliding friction, moderate torsional, low rolling -->
+        <!-- Increased thickness to 0.02 for better collision stability -->
+        <body name="shelf_collisions" pos="0 -0.19 0" quat="1 0 0 0">
+            <!-- Shelf layers - perfectly horizontal boxes with high friction -->
+            <geom name="shelf_layer_1" type="box" size="0.5 0.18 0.02" pos="0 0 0.10" 
+                  conaffinity="1" contype="1" condim="6" friction="2 0.5 0.001" rgba="0.5 0.5 0.5 0.2"/>
+            <geom name="shelf_layer_2" type="box" size="0.5 0.18 0.02" pos="0 0 0.46"
+                  conaffinity="1" contype="1" condim="6" friction="2 0.5 0.001" rgba="0.5 0.5 0.5 0.2"/>
+            <geom name="shelf_layer_3" type="box" size="0.5 0.18 0.02" pos="0 0 0.82"
+                  conaffinity="1" contype="1" condim="6" friction="2 0.5 0.001" rgba="0.5 0.5 0.5 0.2"/>
+            <geom name="shelf_layer_4" type="box" size="0.5 0.18 0.02" pos="0 0 1.17"
+                  conaffinity="1" contype="1" condim="6" friction="2 0.5 0.001" rgba="0.5 0.5 0.5 0.2"/>
+            <geom name="shelf_layer_5" type="box" size="0.5 0.18 0.02" pos="0 0 1.53"
+                  conaffinity="1" contype="1" condim="6" friction="2 0.5 0.001" rgba="0.5 0.5 0.5 0.2"/>
+        </body>
+        
+        <!-- Microscope - placed on shelf layer 5 (top), rotated to stand upright -->
+        <body name="microscope" pos="0 -0.19 1.55" euler="1.5708 0 0">
+            <joint name="microscope_free" type="free" damping="1.0"/>
+            <!-- Visual mesh -->
+            <geom name="microscope_visual" class="visual" type="mesh" mesh="microscope_mesh" material="microscope_material"/>
+            <!-- Convex hull collision -->
+            <geom name="microscope_col" type="mesh" mesh="microscope_convex"
+                  contype="1" conaffinity="1" condim="6" friction="2 0.5 0.001" rgba="0 0 0 0"/>
+        </body>
+    </worldbody>
+
+</mujoco>

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mujoco model="metal_shelf">
+    <compiler angle="radian" meshdir="." />
+
+    <default>
+        <default class="shelf">
+            <geom conaffinity="1" contype="1" group="1"/>
+        </default>
+        <default class="shelf_visual">
+            <geom conaffinity="0" contype="0" group="2"/>
+        </default>
+        <default class="shelf_collision">
+            <geom conaffinity="1" condim="3" contype="1" group="3" margin="0.001"/>
+        </default>
+    </default>
+
+    <asset>
+        <!-- Mesh asset -->
+        <mesh name="metal_shelf_mesh" file="eb_metal_shelf_01.obj" scale="1 1 1"/>
+        <!-- Material -->
+        <material name="shelf_metal" rgba="0.7 0.7 0.75 1" metallic="0.8" roughness="0.3" />
+    </asset>
+
+    <worldbody>
+        <body name="metal_shelf" pos="0 0 0">
+            <!-- Visual mesh -->
+            <geom class="shelf_visual" type="mesh" mesh="metal_shelf_mesh" material="shelf_metal"/>
+            <!-- Simple collision boxes for each shelf layer -->
+            <geom class="shelf_collision" type="box" size="0.4 0.15 0.005" pos="0 0 0.1" rgba="0.7 0.7 0.75 0.3"/>
+            <geom class="shelf_collision" type="box" size="0.4 0.15 0.005" pos="0 0 0.4" rgba="0.7 0.7 0.75 0.3"/>
+            <geom class="shelf_collision" type="box" size="0.4 0.15 0.005" pos="0 0 0.7" rgba="0.7 0.7 0.75 0.3"/>
+            <geom class="shelf_collision" type="box" size="0.4 0.15 0.005" pos="0 0 1.0" rgba="0.7 0.7 0.75 0.3"/>
+            <geom class="shelf_collision" type="box" size="0.4 0.15 0.005" pos="0 0 1.3" rgba="0.7 0.7 0.75 0.3"/>
+            <!-- Leg collision cylinders -->
+            <geom class="shelf_collision" type="cylinder" size="0.02 0.7" pos="-0.35 -0.12 0.7" rgba="0.7 0.7 0.75 0.3"/>
+            <geom class="shelf_collision" type="cylinder" size="0.02 0.7" pos="0.35 -0.12 0.7" rgba="0.7 0.7 0.75 0.3"/>
+            <geom class="shelf_collision" type="cylinder" size="0.02 0.7" pos="-0.35 0.12 0.7" rgba="0.7 0.7 0.75 0.3"/>
+            <geom class="shelf_collision" type="cylinder" size="0.02 0.7" pos="0.35 0.12 0.7" rgba="0.7 0.7 0.75 0.3"/>
+        </body>
+    </worldbody>
+
+</mujoco>
