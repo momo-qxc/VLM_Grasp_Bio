@@ -2,66 +2,109 @@
 
 [English](README-EN.md)
 
-基于 MuJoCo + UR5e + VLM + GraspNet 的智能抓取与放置系统。当前版本支持**纯自然语言交互**：用户可以直接输入中文或英文等自然语言指令（例如“把培养皿放到显微镜右边”），系统即可自动完成指令解析、目标分割、抓取姿态推理、放置点预测与机械臂执行。
+基于 MuJoCo + UR5e + VLM + GraspNet 的实验室智能抓取与放置系统。项目面向“自然语言驱动机器人执行”场景，支持从一句口语化指令出发，自动完成目标理解、视觉定位、抓取推理、放置推理与运动执行；在障碍场景下可切换在线 RRT 避障规划，实现复杂环境中的安全搬运与放置。
 
-## 1. 项目介绍
+## 1. 项目概览
 
-本项目围绕实验室场景下的抓取与放置任务，构建了一个“感知-推理-执行”一体化流程：
+本项目构建了一个完整的“语言-视觉-动作”闭环：
 
-1. 自然语言理解：解析抓取目标与放置描述。
-2. 视觉定位与分割：VLM 找目标，SAM 生成掩码。
-3. 抓取推理：结合深度图与点云，使用 GraspNet 预测抓取姿态。
-4. 多相机融合：桌面/侧视/俯视/全局视角协同，提高遮挡场景鲁棒性。
-5. 放置预测：将“显微镜右边”“绿色区域偏左”等描述落到像素点，再映射到世界坐标。
-6. 运动执行：UR5e 在 MuJoCo 中完成抓取、搬运、放置与放回任务。
+1. 指令理解：解析抓取对象、放置描述、是否为放回任务。
+2. 视觉感知：多相机搜索目标，VLM 识别 + SAM 分割。
+3. 抓取推理：基于深度/点云与 GraspNet 生成抓取姿态。
+4. 放置推理：将“显微镜右边”等语义映射为像素点，再转换为世界坐标。
+5. 运动执行：根据场景与规划模式自动选择执行链路（普通场景默认执行 / 障碍场景在线 RRT 避障），完成抓取、搬运、放置、回撤与回位。
 
-系统提供两种使用方式：
+系统提供两类入口：
 
-- `mujoco_vlm.py`：CLI（命令行）模式。
-- `ui_main_qt.py`：PyQt5 图形界面模式（包含模型设置、界面设置、实时日志与相机画面）。
+- `mujoco_vlm.py`：CLI 交互入口。
+- `ui_main_qt.py`：图形界面入口（推荐，支持场景与规划模式切换）。
 
-## 2. 核心能力
+## 2. 系统执行模式
 
-- 纯自然语言交互：
-  - 支持“抓取 + 放置”组合指令。
-  - 支持“放回原处 / 放回货架 / 放回上次位置”等放回语义。
-- 指令澄清机制：
-  - 对“右边一点”“旁边”等模糊描述自动追问，减少错误执行。
-- 多相机目标搜索：
-  - 先后在 `cam`、`cam_2` 等视角中搜索目标，提高检出率。
-- 抓取策略自适应：
-  - 根据目标在“桌面/货架”位置切换抓取过滤逻辑。
-  - 支持单相机推理与多相机点云融合推理。
-- 放置点预测与可视化：
-  - 支持基于参考物体（如显微镜）和颜色区域（红/绿区域）定位放置点。
-  - 自动在 `PredictionResults/` 保存放置预测标注图。
-- 历史位置记忆：
-  - 记录物体抓取/放置历史，支持后续“放回”指令。
+项目目前支持两条执行链路：
 
-## 3. 项目结构
+### 2.1 默认执行链路（普通场景）
+
+- 主执行器：`grasp_process_optimized.py`
+- 典型场景：普通实验台、无复杂障碍绕行需求
+- 特点：流程成熟、执行速度快、适合日常抓放与放回任务
+
+### 2.2 障碍场景在线 RRT 链路
+
+- 主执行器：`obstacle_rrt/online_rrt_executor.py`
+- 触发条件（`task_executor.py`）：
+  - `scene_name == "障碍场景"`
+  - `planner_mode == "RRT避障算法"`
+  - 放置点识别成功（`target_pos is not None`）
+- 典型场景：显微镜、障碍球、货架等结构造成的窄通道或避障需求
+- 核心机制：在线 RRT（规划一段，执行一段，失败即重规划），并结合中转点、救援重规划、分层下降放置策略
+
+### 2.3 场景示意
+
+普通场景（默认执行链路）：
+
+![一般场景](Visual%20results/一般场景.png)
+
+障碍场景（在线 RRT 避障链路）：
+
+![障碍场景](Visual%20results/障碍场景.png)
+
+## 3. 核心能力
+
+- 自然语言任务执行
+  - 支持中英文等自然语言输入。
+  - 支持“抓取 + 放置”与“放回”语义。
+- 模糊语义澄清
+  - 对不明确位置描述（如“右边一点”）进行追问与补全。
+- 多相机目标搜索
+  - 在 `cam`、`cam_2` 等视角依次搜索目标，提升检出鲁棒性。
+- 自适应抓取策略
+  - 区分桌面/货架目标，自动选择抓取推理与过滤策略。
+  - 支持单相机与融合点云推理。
+- 语义放置推理
+  - 支持参考物体关系（如“显微镜右边”）和颜色区域描述。
+  - 自动保存预测可视化结果到 `PredictionResults/`。
+- 障碍场景避障执行
+  - 在线 RRT 周期性重规划与分段执行。
+  - 障碍物自动抽取：障碍球、显微镜碰撞体、货架碰撞体。
+  - 近目标下降采用分层候选搜索与避障约束。
+- 历史记忆与放回
+  - 记录抓取原位与放置结果，支持后续放回指令。
+
+## 4. 项目结构
 
 ```text
 VLM_Grasp_Bio-UI/
-├── mujoco_vlm.py                 # CLI 入口
-├── ui_main_qt.py                 # PyQt5 图形界面入口
-├── task_executor.py              # 共享任务执行主流程（UI/CLI 共用）
-├── vlm_process.py                # 指令解析、VLM识别、SAM分割、像素转世界坐标
-├── grasp_process_optimized.py    # 抓取推理与执行（融合、调平、放回记忆）
-├── config.py                     # 模型/API/工作空间配置
-├── workspace_sampler.py          # 工作空间采样与可视化
-├── manipulator_grasp/            # 机械臂仿真、运动学、规划控制
-├── graspnet-baseline/            # GraspNet baseline 与自定义算子
-├── model/                        # MuJoCo 场景与物体模型
-├── logs/log_rs/checkpoint-rs.tar # GraspNet 权重（需存在）
-├── Visual results/               # README 展示图片与视频
-└── PredictionResults/            # 运行时保存的放置预测结果
+├── mujoco_vlm.py                    # CLI 入口
+├── ui_main_qt.py                    # UI 入口（场景/规划切换、日志、画面）
+├── task_executor.py                 # 统一任务编排（UI/CLI 共用）
+├── vlm_process.py                   # 指令解析、VLM识别、SAM分割、像素->世界坐标
+├── grasp_process_optimized.py       # 默认抓取执行链路
+├── obstacle_rrt/                    # 障碍场景在线 RRT 模块
+│   ├── online_rrt_executor.py       # 在线RRT主执行器
+│   ├── obstacle_extractor.py        # MuJoCo几何体到碰撞体构建
+│   ├── improved_adapter.py          # improved_rrt_robot 适配
+│   └── __init__.py
+├── manipulator_grasp/               # 仿真环境与机器人运动学/轨迹规划
+│   └── assets/scenes/
+│       ├── scene.xml                # 普通场景
+│       └── scene_obstacle.xml       # 障碍场景
+├── graspnet-baseline/               # GraspNet baseline 与算子
+├── model/                           # 模型与测试脚本
+├── config.py                        # 模型/API/界面配置
+├── workspace_sampler.py             # 工作空间采样与可视化
+├── logs/log_rs/checkpoint-rs.tar    # GraspNet 权重（需存在）
+├── sam_b.pt                         # SAM 权重（需存在）
+├── PredictionResults/               # 运行时放置预测可视化
+├── Visual results/                  # README 展示资源
+└── video/                           # 演示视频
 ```
 
-## 4. 安装与环境配置
+## 5. 安装与环境配置
 
-本项目当前可用环境已记录在仓库根目录 `实验环境.txt`。下面给出一套与当前代码匹配的安装流程，并附关键版本参考。
+项目环境参考仓库根目录 `实验环境.txt`。以下是与当前代码匹配的推荐安装流程。
 
-### 4.1 实验环境关键版本（摘自 `实验环境.txt`）
+### 5.1 关键版本参考
 
 | 组件 | 版本 |
 |------|------|
@@ -80,7 +123,7 @@ VLM_Grasp_Bio-UI/
 | modern-robotics | 1.1.1 |
 | graspnetapi | 1.2.11 |
 
-### 4.2 安装步骤（推荐）
+### 5.2 安装步骤
 
 1. 创建并激活环境
 
@@ -97,14 +140,13 @@ cd graspnet-baseline
 pip install -r requirements.txt
 ```
 
-3. 安装 PyTorch（请按本机 CUDA 版本选择）
+3. 安装 PyTorch（按本机 CUDA 版本选择）
 
 ```bash
-# 示例：与实验环境一致的版本号
 pip install torch==2.9.1 torchvision==0.24.1 torchaudio
 ```
 
-4. 安装机器人与仿真核心依赖
+4. 安装机器人与仿真依赖
 
 ```bash
 pip install spatialmath-python==1.1.14
@@ -144,111 +186,108 @@ pip install numpy==1.26.4 pillow
 pip install opencv-python==4.7.0.72
 ```
 
-8. 安装语音与音频依赖（如需语音交互）
+8. 可选：语音交互依赖
 
 ```bash
 pip install openai-whisper soundfile sounddevice pydub
 ```
 
-9. 检查模型与权重文件
+9. 检查关键权重文件
 
 ```text
 logs/log_rs/checkpoint-rs.tar
 sam_b.pt
 ```
 
-### 4.3 与 `实验环境.txt` 对齐校验（可选）
+## 6. 配置说明
 
-```bash
-python -V
-pip show torch torchvision mujoco open3d ultralytics openai pyqt5
-conda list > current_env.txt
-```
+### 6.1 VLM 与 API 配置
 
-然后将 `current_env.txt` 与仓库中的 `实验环境.txt` 对比，排查版本差异。
+项目通过 `config.py` 的 `Config` 类管理模型配置（如 `MODELS`、`ACTIVE_MODEL`、`QWEN_*`）。
 
-## 5. 模型与配置
+在 UI 中可以通过“**大模型设置**”界面增删与切换模型，并写回 `config.py`。
 
-### 5.1 GraspNet 权重
+### 6.2 RRT 参数配置（障碍场景）
 
-请确认以下文件存在：
+障碍场景在线 RRT 参数集中在 `obstacle_rrt/online_rrt_executor.py` 的 `DEFAULT_RRT_CFG`，包括：
 
-```text
-logs/log_rs/checkpoint-rs.tar
-```
+- 基础规划参数：`expand_dis`、`goal_sample_rate`、`max_iter`、`max_cycles`
+- 碰撞参数：`obstacle_inflation`、`collision_check_expand_dis`
+- 失败恢复参数：`failure_*`、`enable_rescue_replan`、`rescue_*`
+- 下降放置参数：`descent_*`
+- 姿态稳定参数：`enable_wrist3_lock`、`wrist3_lock_deg` 等
 
-### 5.2 VLM API 配置
+## 7. 快速开始
 
-当前项目通过 `config.py` 的 `Config` 类读取模型配置（`MODELS`、`ACTIVE_MODEL`、`QWEN_*` 等）。
-
-图形界面中可直接在“**大模型设置界面**”增删/切换模型配置，保存后会写回 `config.py`。
-
-
-## 6. 快速开始
-
-### 6.1 CLI 运行
+### 7.1 CLI 模式
 
 ```bash
 python mujoco_vlm.py
 ```
 
-运行后直接输入自然语言指令（支持中英等多语言），例如：
+输入示例：
 
-- `把培养皿放到显微镜右边` / `Put the petri dish to the right of the microscope`
-- `把培养皿放回原处` / `Put the petri dish back to its original position`
-- `把培养皿放回货架` / `Put the petri dish back on the shelf`
+- `把培养皿放到显微镜右边`
+- `把培养皿放回原处`
+- `把培养皿放回货架`
 
 输入 `q` 退出。
 
-### 6.2 UI 运行
+说明：CLI 默认调用 `execute_smart_task(user_input)`，默认参数为“普通场景 + 默认算法”。
+
+### 7.2 UI 模式（推荐）
 
 ```bash
 python ui_main_qt.py
 ```
 
-UI 包含：
+UI 提供：
 
-- 指令输入与聊天式交互区。
-- 实时相机画面区。
-- 状态与执行反馈。
-- 底层调试日志窗口。
-- 模型设置与界面设置窗口。
+- 场景切换（普通场景 / 障碍场景）
+- 规划模式切换（默认算法 / RRT避障算法）
+- 聊天式指令输入
+- 双视角画面与实时日志
+- 模型设置与界面设置
 
-## 7. 复现指南
+### 7.3 障碍场景 RRT 运行示例
 
-建议按以下顺序复现：
+1. 启动 `ui_main_qt.py`。
+2. 切换到 `障碍场景`。
+3. 规划模式选择 `RRT避障算法`。
+4. 输入：`把培养皿放到显微镜右边`。
+5. 日志中可观察到 RRT 阶段执行（阶段5~8）。
 
-1. 环境与依赖安装完成。
-2. 确认 `logs/log_rs/checkpoint-rs.tar` 和 `sam_b.pt` 存在。
-3. 配置可用的 VLM API（`config.py` 或 UI 设置）。
-4. 执行场景冒烟测试：
+## 8. 复现建议流程
+
+1. 完成环境安装并确认权重存在。
+2. 配置可用 VLM API（`config.py` 或 UI 模型设置）。
+3. 运行场景冒烟测试：
 
 ```bash
 python model/test_lab_equipment.py
 ```
 
-5. 执行端到端任务：
+4. 运行端到端任务：
 
 ```bash
-python mujoco_vlm.py
-# 或
 python ui_main_qt.py
+# 或 python mujoco_vlm.py
 ```
 
-6. 使用示例指令验证：
+5. 使用示例指令验证：
 
 ```text
 把培养皿放到显微镜右边
 ```
 
-7. 检查输出：
+6. 检查输出：
 
-- UI 中查看相机画面与日志。
-- `PredictionResults/` 中查看放置预测标注图。
+- UI 实时日志与画面是否完整
+- `PredictionResults/` 是否生成放置预测标注图
 
-## 8. 实验效果展示
+## 9. 实验效果展示
 
-### 8.1 系统界面与配置
+### 9.1 系统界面与配置
 
 交互主界面：
 
@@ -266,7 +305,7 @@ python ui_main_qt.py
 
 ![调试日志](Visual%20results/调试日志.png)
 
-### 8.2 感知与空间能力
+### 9.2 感知与空间能力
 
 点云融合效果：
 
@@ -276,7 +315,7 @@ python ui_main_qt.py
 
 ![workspace_map](Visual%20results/workspace_map.png)
 
-### 8.3 示例任务：“把培养皿放到显微镜右边” / “Put the petri dish to the right of the microscope”
+### 9.3 示例任务：“把培养皿放到显微镜右边” / “Put the petri dish to the right of the microscope”
 
 本组结果对应一次完整任务链路：目标识别 -> 放置点预测 -> 抓取执行 -> 放置完成。
 
@@ -300,11 +339,11 @@ UI 界面中的放置结果：
 
 ![放置结果](Visual%20results/放置结果.png)
 
-### 8.4 演示视频
+### 9.4 演示视频
 
 - [演示效果.webm](video/演示效果.webm)
 
-## 9. 常见问题
+## 10. 常见问题
 
 1. `checkpoint-rs.tar` 找不到
 
@@ -314,15 +353,23 @@ UI 界面中的放置结果：
 
 请确认根目录存在 `sam_b.pt`，并已安装 `ultralytics`。
 
-3. UI 启动时 Qt 库冲突
+3. UI 启动时报 Qt 库冲突
 
 `ui_main_qt.py` 已包含 Qt 库路径修正与自重启逻辑；若仍报错，请检查 conda/base 环境中的 Qt 动态库冲突。
 
-4. 放置描述过于模糊导致结果不稳定
+4. 没有触发 RRT 执行
 
-尽量给出明确方向和距离，例如“显微镜右边 5 厘米”。系统也会在部分模糊描述下自动追问澄清。
+请确认同时满足以下条件：
 
-## 10. 致谢
+- 场景为 `障碍场景`
+- 规划模式为 `RRT避障算法`
+- 放置点识别成功（存在 `target_pos`）
+
+5. 放置描述导致结果不稳定
+
+尽量给出明确方向和距离（例如“显微镜右边 5 厘米”）。系统会在部分模糊描述下触发澄清提问。
+
+## 11. 致谢
 
 - [GraspNet Baseline](https://github.com/graspnet/graspnet-baseline)
 - [MuJoCo](https://mujoco.org/)

@@ -206,7 +206,7 @@ class TaskExecutor:
         return color, imgs['depth'], imgs['img']
 
     # ── 主入口 ────────────────────────────────────────────
-    def execute_smart_task(self, instruction):
+    def execute_smart_task(self, instruction, planner_mode="默认算法", scene_name="普通场景"):
         """解析自然语言指令并执行完整的抓取/放置流程。"""
         env = self.env
 
@@ -224,9 +224,12 @@ class TaskExecutor:
             is_return_old = parsed.get("is_return", False) or parsed.get("is_putback", False)
             if is_return_old:
                 return_type = "initial"
-        self.log("STEP",
+        self.log(
+            "STEP",
             f"[Step 1] 抓取目标: {grasp_target} | 放置: {place_desc or '默认'}"
-            + (f" | 放回指令({return_type})" if return_type != "none" else ""))
+            + (f" | 放回指令({return_type})" if return_type != "none" else "")
+            + f" | 场景: {scene_name} | 规划: {planner_mode}",
+        )
 
         # ===== 放回流程 =====
         if return_type != "none":
@@ -295,9 +298,36 @@ class TaskExecutor:
 
         # Step 6: 执行
         use_desktop_fusion = (found_camera == CAMERA_TABLE and not is_on_shelf)
-        execute_grasp(env, gg, T_wc=T_wc_table, target_pos=target_pos,
-                      object_name=grasp_target,
-                      desktop_fusion=use_desktop_fusion)
+        use_obstacle_rrt = (
+            scene_name == "障碍场景"
+            and planner_mode == "RRT避障算法"
+            and target_pos is not None
+        )
+
+        if use_obstacle_rrt:
+            self.log("STEP", "[RRT] 障碍场景 + RRT避障算法，启用在线RRT路径规划")
+            from obstacle_rrt import execute_grasp_with_online_rrt
+
+            execute_grasp_with_online_rrt(
+                env=env,
+                gg=gg,
+                T_wc=T_wc_table,
+                target_pos=target_pos,
+                object_name=grasp_target,
+                log_fn=self.log,
+            )
+        else:
+            if scene_name == "障碍场景" and planner_mode == "RRT避障算法" and target_pos is None:
+                self.log("WARN", "[RRT] 未识别到放置目标点，回退原始执行流程")
+
+            execute_grasp(
+                env,
+                gg,
+                T_wc=T_wc_table,
+                target_pos=target_pos,
+                object_name=grasp_target,
+                desktop_fusion=use_desktop_fusion,
+            )
 
         # 记录放置位置
         if target_pos and grasp_target:

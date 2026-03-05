@@ -582,6 +582,7 @@ class UISignals(QObject):
     update_cam = pyqtSignal(str, object) # key, bgr_img
     task_done  = pyqtSignal()
     set_status = pyqtSignal(str)        # ready|running|error
+    set_scene_status = pyqtSignal(str)  # scene name
     plan_done  = pyqtSignal(bool, str)  # ok, result
 
 # ── 设置读写（从 config.py 读取，保存也写回 config.py）──────
@@ -733,6 +734,7 @@ class MainWindow(QMainWindow):
         self.env         = None
         self.env_ready   = False
         self._task_queue = queue.Queue()
+        self._scene_switch_queue = queue.Queue()
         self._log_buffer = []
         self._chat_mode  = "normal"
         self._clarification_event  = threading.Event()
@@ -740,6 +742,8 @@ class MainWindow(QMainWindow):
         self._settings   = load_settings()
         self.is_planning  = False
         self.is_diagnosing = False
+        self.current_scene_name = "普通场景"
+        self.current_scene_path = "/home/robot/VLM_Grasp_Bio-UI/manipulator_grasp/assets/scenes/scene.xml"
 
         # ── 信号 ──
         self.sig = UISignals()
@@ -748,6 +752,7 @@ class MainWindow(QMainWindow):
         self.sig.update_cam.connect(self._update_camera)
         self.sig.task_done.connect(self._on_task_done)
         self.sig.set_status.connect(self._set_status)
+        self.sig.set_scene_status.connect(self._set_scene_status)
         self.sig.plan_done.connect(self._on_plan_done)
 
         self._build_ui()
@@ -854,23 +859,59 @@ class MainWindow(QMainWindow):
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(6)
 
+        # 场景切换
+        scene_card = make_card()
+        scene_lay = QVBoxLayout(scene_card)
+        scene_lay.setContentsMargins(10, 10, 10, 10)
+        scene_lay.addWidget(make_section_label("🔄 场景模式"))
+
+        # 场景选择下拉框
+        scene_label = QLabel("当前场景:")
+        scene_label.setStyleSheet(f"color: {TEXT_SEC}; font-size: 14px; background: transparent; border: none;")
+        scene_lay.addWidget(scene_label)
+
+        self.scene_combo = CustomDropdown()
+        self.scene_combo.addItem("普通场景")
+        self.scene_combo.addItem("障碍场景")
+        self.scene_combo.setCurrentIndex(0)
+        self.scene_combo.currentTextChanged.connect(self._on_scene_changed)
+        scene_lay.addWidget(self.scene_combo)
+
+        # 场景状态指示
+        self.scene_status_label = QLabel("✓ 普通场景已加载")
+        self.scene_status_label.setStyleSheet(f"color: {EMERALD}; font-size: 13px; background: transparent; border: none; padding: 4px;")
+        scene_lay.addWidget(self.scene_status_label)
+
+        # 规划算法选择
+        planner_label = QLabel("路径规划:")
+        planner_label.setStyleSheet(f"color: {TEXT_SEC}; font-size: 14px; background: transparent; border: none;")
+        scene_lay.addWidget(planner_label)
+
+        self.planner_combo = CustomDropdown()
+        self.planner_combo.addItem("默认算法")
+        self.planner_combo.addItem("RRT避障算法")
+        self.planner_combo.setCurrentIndex(0)
+        scene_lay.addWidget(self.planner_combo)
+
+        lay.addWidget(scene_card)
+
         # 快捷控制
         ctrl = make_card()
         ctrl_lay = QVBoxLayout(ctrl)
         ctrl_lay.setContentsMargins(10, 10, 10, 10)
         ctrl_lay.addWidget(make_section_label("⚡ 快捷控制"))
-        
+
         self.btn_exec = ActionButton("▶️  执行任务", color=CYAN, dim_color=CYAN_DIM)
         self.btn_exec.setObjectName("btn_exec")
         self.btn_exec.setFixedHeight(38)
         self.btn_exec.clicked.connect(self._on_execute)
-        
+
         self.btn_stop = ActionButton("⏹️  紧急停止", color=ROSE, dim_color=BG_INPUT)
         self.btn_stop.setObjectName("btn_stop")
         self.btn_stop.setFixedHeight(38)
         self.btn_stop.setEnabled(False)
         self.btn_stop.clicked.connect(self._on_stop)
-        
+
         ctrl_lay.addWidget(self.btn_exec)
         ctrl_lay.addWidget(self.btn_stop)
         lay.addWidget(ctrl)
@@ -1109,6 +1150,17 @@ class MainWindow(QMainWindow):
         self.btn_stop.setEnabled(False)
         self._add_chat_bubble("任务完成！", "ai")
 
+    def _set_scene_status(self, scene_name):
+        self.current_scene_name = scene_name
+        if scene_name == "普通场景":
+            self.scene_status_label.setText("✓ 普通场景已加载")
+            self.scene_status_label.setStyleSheet(
+                f"color: {EMERALD}; font-size: 13px; background: transparent; border: none; padding: 4px;")
+        else:
+            self.scene_status_label.setText("✓ 障碍场景已加载")
+            self.scene_status_label.setStyleSheet(
+                f"color: {AMBER}; font-size: 13px; background: transparent; border: none; padding: 4px;")
+
     # ══════════════════════════════════════════════════════
     #  相机图像更新
     # ══════════════════════════════════════════════════════
@@ -1239,17 +1291,52 @@ class MainWindow(QMainWindow):
         if mode == "smart" and not instruction:
             self._add_chat_bubble("智能放置模式需要输入指令", "ai")
             return
+        planner_mode = self.planner_combo.currentText() if hasattr(self, "planner_combo") else "默认算法"
+        scene_name = self.scene_combo.currentText() if hasattr(self, "scene_combo") else "普通场景"
         self.running = True
         self.sig.set_status.emit("running")
         self.btn_exec.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self._add_chat_bubble(f"收到指令：{instruction}\n正在分析，请稍候...", "ai")
         self.sig.add_log.emit("STEP",
-            f">> 开始执行 | 模式: {mode} | 指令: {instruction or '(无)'}")
-        self._task_queue.put((mode, instruction))
+            f">> 开始执行 | 模式: {mode} | 场景: {scene_name} | 规划: {planner_mode} | 指令: {instruction or '(无)'}")
+        self._task_queue.put((mode, instruction, planner_mode, scene_name))
 
     def _on_stop(self):
         self.sig.add_log.emit("WARN", "[!] 用户请求停止（当前步骤完成后生效）")
+
+    def _on_scene_changed(self, scene_name):
+        """处理场景切换"""
+        if self.running or not self.env_ready:
+            self._add_chat_bubble("任务执行中或环境未就绪，无法切换场景", "ai")
+            # 回滚到已加载场景（阻断信号，避免 currentTextChanged 递归触发）
+            prev_idx = self.scene_combo.findText(self.current_scene_name)
+            if prev_idx >= 0:
+                self.scene_combo.blockSignals(True)
+                try:
+                    self.scene_combo.setCurrentIndex(prev_idx)
+                finally:
+                    self.scene_combo.blockSignals(False)
+            return
+
+        if scene_name == self.current_scene_name:
+            return
+
+        self.sig.add_log.emit("INFO", f">> 用户请求切换场景: {scene_name}")
+        self._add_chat_bubble(f"正在切换到{scene_name}...", "ai")
+
+        # 确定场景文件路径
+        if scene_name == "普通场景":
+            scene_path = "/home/robot/VLM_Grasp_Bio-UI/manipulator_grasp/assets/scenes/scene.xml"
+        else:  # 障碍场景
+            scene_path = "/home/robot/VLM_Grasp_Bio-UI/manipulator_grasp/assets/scenes/scene_obstacle.xml"
+
+        # 标记环境为未就绪，防止在切换过程中执行任务
+        self.env_ready = False
+        self.sig.set_status.emit("running")
+
+        # 将场景切换请求放入队列，由MuJoCo线程处理
+        self._scene_switch_queue.put((scene_name, scene_path))
 
     def _ask_clarification_blocking(self, question):
         self._clarification_event.clear()
@@ -1757,11 +1844,77 @@ class MainWindow(QMainWindow):
             return
 
         while True:
+            # 检查场景切换请求
             try:
-                mode, instruction = self._task_queue.get_nowait()
+                scene_name, scene_path = self._scene_switch_queue.get_nowait()
+                log_queue.put(("INFO", f">> 开始切换场景: {scene_name}"))
+                try:
+                    # 关闭旧环境
+                    if self.env is not None:
+                        try:
+                            if hasattr(self.env, 'mj_viewer') and self.env.mj_viewer:
+                                self.env.mj_viewer.close()
+                        except Exception:
+                            pass
+                        try:
+                            self.env.close()
+                        except Exception:
+                            pass
+
+                    # 创建新环境
+                    from manipulator_grasp.env.ur5_grasp_env import UR5GraspEnv
+                    log_queue.put(("INFO", f">> 正在加载场景文件: {scene_path}"))
+                    self.env = UR5GraspEnv(scene_file=scene_path)
+                    self.env.reset()
+                    for _ in range(500):
+                        self.env.step()
+
+                    # 关闭 viewer 窗口
+                    try:
+                        self.env.mj_viewer.close()
+                    except Exception:
+                        pass
+
+                    # 重新创建任务执行器
+                    from task_executor import TaskExecutor
+                    self.executor = TaskExecutor(
+                        env=self.env,
+                        log_fn=lambda level, msg: log_queue.put((level, msg)),
+                        ask_fn=self._ask_clarification_blocking,
+                        image_fn=lambda key, img: result_queue.put((key, img)),
+                        headless=True,
+                        render_callback=self._render_for_task,
+                    )
+
+                    self.env_ready = True
+                    self.current_scene_path = scene_path
+                    log_queue.put(("SUCCESS", f"[OK] 场景切换成功: {scene_name}"))
+                    self.sig.add_chat.emit(f"✓ {scene_name}已加载完成", "ai")
+                    self.sig.set_status.emit("ready")
+                    self.sig.set_scene_status.emit(scene_name)
+
+                except Exception as e:
+                    import traceback
+                    log_queue.put(("ERR", f"[X] 场景切换失败: {e}"))
+                    log_queue.put(("ERR", traceback.format_exc()))
+                    self.sig.add_chat.emit(f"场景切换失败: {str(e)}", "ai")
+                    self.env_ready = False
+                    self.sig.set_status.emit("error")
+                continue
+            except queue.Empty:
+                pass
+
+            # 检查任务执行请求
+            try:
+                task_item = self._task_queue.get_nowait()
+                if isinstance(task_item, tuple) and len(task_item) >= 4:
+                    mode, instruction, planner_mode, scene_name = task_item[:4]
+                else:
+                    mode, instruction = task_item
+                    planner_mode, scene_name = "默认算法", "普通场景"
                 self.running = True
                 try:
-                    self._do_task(mode, instruction)
+                    self._do_task(mode, instruction, planner_mode, scene_name)
                     log_queue.put(("SUCCESS", "[OK] 任务完成"))
                 except Exception as e:
                     import traceback
@@ -1806,8 +1959,12 @@ class MainWindow(QMainWindow):
     # ══════════════════════════════════════════════════════
     #  任务执行（委托给 TaskExecutor）
     # ══════════════════════════════════════════════════════
-    def _do_task(self, mode, instruction):
-        self.executor.execute_smart_task(instruction or "")
+    def _do_task(self, mode, instruction, planner_mode="默认算法", scene_name="普通场景"):
+        self.executor.execute_smart_task(
+            instruction or "",
+            planner_mode=planner_mode,
+            scene_name=scene_name,
+        )
 
     def closeEvent(self, event):
         if self.env is not None:
@@ -1828,4 +1985,3 @@ if __name__ == "__main__":
     window = MainWindow()
     window.show()
     sys.exit(app.exec_())
-

@@ -5,12 +5,12 @@
 
 class Config:
     # ==================== VLM 主模型（用于抓取识别）====================
-    QWEN_API_KEY = 'API_KEY'
+    QWEN_API_KEY = 'your_key'
     QWEN_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
     QWEN_MODEL = 'qwen-vl-max-latest'
 
     # ==================== 润色专用模型（不在 UI 设置中显示）====================
-    POLISH_API_KEY = 'API_KEY'
+    POLISH_API_KEY = 'your_key'
     POLISH_BASE_URL = 'https://api.deepseek.com'
     POLISH_MODEL = 'deepseek-chat'
 
@@ -18,11 +18,11 @@ class Config:
     MODELS = {
         'qwen-vl-max-latest': {
             'url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-            'key': 'API_KEY',
+            'key': 'your_key',
         },
         'gpt-5.2-pro-2025-12-11': {
             'url': 'https://api.openai.com/v1',
-            'key': 'API_KEY',
+            'key': 'your_key',
         },
     }
     ACTIVE_MODEL = 'qwen-vl-max-latest'

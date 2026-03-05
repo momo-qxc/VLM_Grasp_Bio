@@ -19,7 +19,7 @@ from manipulator_grasp.utils import mj
 
 class UR5GraspEnv:
 
-    def __init__(self):
+    def __init__(self, scene_file=None):
         self.sim_hz = 500
 
         self.mj_model: mujoco.MjModel = None
@@ -47,11 +47,17 @@ class UR5GraspEnv:
         self.offscreen_viewport = None
         self.glfw_window = None
 
+        # 保存场景文件路径
+        if scene_file is None:
+            self.scene_file = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'scenes', 'scene.xml')
+        else:
+            self.scene_file = scene_file
+
 
     def reset(self):
 
         # 初始化 MuJoCo 模型和数据
-        filename = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'assets', 'scenes', 'scene.xml')
+        filename = self.scene_file
         self.mj_model = mujoco.MjModel.from_xml_path(filename)
         self.mj_data = mujoco.MjData(self.mj_model)
         mujoco.mj_forward(self.mj_model, self.mj_data)
