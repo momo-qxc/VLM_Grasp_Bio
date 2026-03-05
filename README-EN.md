@@ -2,66 +2,109 @@
 
 [中文](README.md)
 
-An intelligent robotic grasp-and-place system built on MuJoCo + UR5e + VLM + GraspNet. The current version supports **pure natural-language interaction**: the user can issue instructions in Chinese, English, and other natural languages (for example, "Put the petri dish to the right of the microscope"), and the system will complete instruction parsing, target segmentation, grasp pose inference, place-point prediction, and robot execution end to end.
+An intelligent lab robotic grasp-and-place system built on MuJoCo + UR5e + VLM + GraspNet. The project targets natural-language-driven robot execution: from one user instruction, it completes target understanding, visual localization, grasp inference, place inference, and motion execution. In obstacle scenes, it can switch to online RRT obstacle-avoidance planning for safer transfer and placement in cluttered environments.
 
 ## 1. Project Overview
 
-This project targets lab-scene grasping and placing tasks with an integrated perception-to-action pipeline:
+This project provides a complete Language-Vision-Action loop:
 
-1. Natural-language understanding: parse grasp target and place description.
-2. Visual grounding and segmentation: VLM locates the object, SAM generates the mask.
-3. Grasp inference: use depth + point cloud with GraspNet to predict grasp pose.
-4. Multi-camera fusion: table/side/top/global views improve robustness under occlusion.
-5. Place prediction: map descriptions such as "to the right of the microscope" or "left side of the green zone" to image pixels, then to world coordinates.
-6. Motion execution: UR5e executes grasp, transfer, placement, and return operations in MuJoCo.
+1. Instruction understanding: parse grasp target, place description, and return intent.
+2. Visual perception: multi-camera target search, VLM recognition, and SAM segmentation.
+3. Grasp inference: generate grasp poses with depth/point cloud and GraspNet.
+4. Place inference: map relational language such as "to the right of the microscope" to image pixels, then to world coordinates.
+5. Motion execution: select execution pipeline by scene and planner mode, then perform grasp, transfer, placement, retreat, and return.
 
 Two interfaces are provided:
 
-- `mujoco_vlm.py`: CLI mode.
-- `ui_main_qt.py`: PyQt5 GUI mode (model settings, UI settings, real-time logs, camera feeds).
+- `mujoco_vlm.py`: CLI entry.
+- `ui_main_qt.py`: GUI entry (recommended, supports scene and planner-mode switching).
 
-## 2. Core Capabilities
+## 2. System Execution Modes
 
-- Pure natural-language interaction:
-  - Supports combined "grasp + place" instructions.
-  - Supports return intents such as "return to original position", "return to shelf", and "return to last grasp position".
-- Clarification for ambiguous instructions:
-  - The system asks follow-up questions for vague descriptions (for example, "a bit to the right" or "nearby").
-- Multi-camera object search:
-  - Searches targets across `cam`, `cam_2`, and other views to improve detection success.
-- Adaptive grasp strategy:
-  - Switches filtering logic based on whether the object is on the table or shelf.
-  - Supports both single-camera inference and fused multi-camera point-cloud inference.
-- Place prediction and visualization:
-  - Supports reference-object-based placement (for example, microscope-based) and color-zone-based placement (red/green area).
-  - Automatically saves placement visualization images to `PredictionResults/`.
-- Position memory for return tasks:
-  - Records grasp/place history and uses it for later return instructions.
+The project currently supports two execution pipelines:
 
-## 3. Project Structure
+### 2.1 Default Pipeline (Normal Scene)
+
+- Main executor: `grasp_process_optimized.py`
+- Typical use: standard bench tasks without complex obstacle detours
+- Characteristics: mature flow, faster execution, suitable for daily grasp/place and return tasks
+
+### 2.2 Online RRT Pipeline (Obstacle Scene)
+
+- Main executor: `obstacle_rrt/online_rrt_executor.py`
+- Activation conditions (in `task_executor.py`):
+  - `scene_name == "障碍场景"`
+  - `planner_mode == "RRT避障算法"`
+  - place target is successfully recognized (`target_pos is not None`)
+- Typical use: narrow passages or constrained motion around microscope, obstacle spheres, shelf structures, etc.
+- Core mechanism: online RRT (plan one segment -> execute one segment -> replan on failure), with transit waypoints, rescue replanning, and layered descent placement strategy
+
+### 2.3 Scene Preview
+
+Normal scene (default pipeline):
+
+![General Scene](Visual%20results/一般场景.png)
+
+Obstacle scene (online RRT pipeline):
+
+![Obstacle Scene](Visual%20results/障碍场景.png)
+
+## 3. Core Capabilities
+
+- Natural-language task execution
+  - Supports Chinese/English and other natural-language inputs.
+  - Supports both "grasp + place" and "return" task semantics.
+- Clarification for ambiguous language
+  - Prompts follow-up questions for vague placement descriptions.
+- Multi-camera target search
+  - Sequential target search across `cam`, `cam_2`, and related views for better robustness.
+- Adaptive grasp strategy
+  - Automatically switches strategy for table vs. shelf objects.
+  - Supports both single-camera and fused point-cloud inference.
+- Semantic place inference
+  - Supports reference-object relations (for example, "right of microscope") and color-region constraints.
+  - Saves placement prediction visualizations to `PredictionResults/`.
+- Obstacle-scene avoidance execution
+  - Online RRT with cycle-based replanning and segmented execution.
+  - Automatic obstacle extraction: obstacle spheres, microscope collision body, shelf collision body.
+  - Layered near-target descent with collision-aware candidate selection.
+- Memory-assisted return tasks
+  - Records grasp origin and placement history for subsequent return instructions.
+
+## 4. Project Structure
 
 ```text
 VLM_Grasp_Bio-UI/
-├── mujoco_vlm.py                 # CLI entry
-├── ui_main_qt.py                 # PyQt5 GUI entry
-├── task_executor.py              # Shared task pipeline (used by both CLI and UI)
-├── vlm_process.py                # Instruction parsing, VLM reasoning, SAM segmentation, pixel-to-world
-├── grasp_process_optimized.py    # Grasp inference and execution (fusion, leveling, memory)
-├── config.py                     # Model/API/workspace configuration
-├── workspace_sampler.py          # Workspace sampling and visualization
-├── manipulator_grasp/            # Robot simulation, kinematics, planning, control
-├── graspnet-baseline/            # GraspNet baseline and custom ops
-├── model/                        # MuJoCo scenes and assets
-├── logs/log_rs/checkpoint-rs.tar # GraspNet checkpoint (required)
-├── Visual results/               # Images/videos used in README
-└── PredictionResults/            # Runtime placement prediction outputs
+├── mujoco_vlm.py                    # CLI entry
+├── ui_main_qt.py                    # GUI entry (scene/planner switching, logs, camera views)
+├── task_executor.py                 # Unified task orchestration (shared by UI/CLI)
+├── vlm_process.py                   # Instruction parsing, VLM recognition, SAM segmentation, pixel->world
+├── grasp_process_optimized.py       # Default execution pipeline
+├── obstacle_rrt/                    # Obstacle-scene online RRT module
+│   ├── online_rrt_executor.py       # Online RRT main executor
+│   ├── obstacle_extractor.py        # MuJoCo geometry -> collision primitives
+│   ├── improved_adapter.py          # improved_rrt_robot adapter
+│   └── __init__.py
+├── manipulator_grasp/               # Simulation environment, kinematics, trajectory planning
+│   └── assets/scenes/
+│       ├── scene.xml                # Normal scene
+│       └── scene_obstacle.xml       # Obstacle scene
+├── graspnet-baseline/               # GraspNet baseline and custom ops
+├── model/                           # Models and test scripts
+├── config.py                        # Model/API/UI configuration
+├── workspace_sampler.py             # Workspace sampling and visualization
+├── logs/log_rs/checkpoint-rs.tar    # GraspNet checkpoint (required)
+├── sam_b.pt                         # SAM checkpoint (required)
+├── PredictionResults/               # Runtime place-prediction visualizations
+├── Visual results/                  # README assets
+└── video/                           # Demo videos
 ```
 
-## 4. Installation and Environment Setup
+## 5. Installation and Environment Setup
 
-The full runnable environment for this project is recorded in `实验环境.txt` at the repository root. The steps below provide a practical setup flow aligned with the current codebase.
+Environment details are documented in `实验环境.txt` at the repository root. The following setup is aligned with the current codebase.
 
-### 4.1 Key package versions (from `实验环境.txt`)
+### 5.1 Key Version Reference
 
 | Component | Version |
 |------|------|
@@ -80,12 +123,12 @@ The full runnable environment for this project is recorded in `实验环境.txt`
 | modern-robotics | 1.1.1 |
 | graspnetapi | 1.2.11 |
 
-### 4.2 Installation steps (recommended)
+### 5.2 Installation Steps
 
-1. Create and activate the environment
+1. Create and activate environment
 
 ```bash
-conda create -n vlm_graspnet python=3.11.14 -y
+conda create -n vlm_graspnet python=3.11 -y
 conda activate vlm_graspnet
 pip install --upgrade pip
 ```
@@ -97,14 +140,13 @@ cd graspnet-baseline
 pip install -r requirements.txt
 ```
 
-3. Install PyTorch (choose by your CUDA setup)
+3. Install PyTorch (choose based on your CUDA setup)
 
 ```bash
-# Example version aligned with the recorded environment
 pip install torch==2.9.1 torchvision==0.24.1 torchaudio
 ```
 
-4. Install robotics and simulation core dependencies
+4. Install robotics and simulation dependencies
 
 ```bash
 pip install spatialmath-python==1.1.14
@@ -144,7 +186,7 @@ pip install numpy==1.26.4 pillow
 pip install opencv-python==4.7.0.72
 ```
 
-8. Install audio/voice dependencies (optional)
+8. Optional: audio/voice dependencies
 
 ```bash
 pip install openai-whisper soundfile sounddevice pydub
@@ -157,46 +199,33 @@ logs/log_rs/checkpoint-rs.tar
 sam_b.pt
 ```
 
-### 4.3 Environment consistency check (optional)
+## 6. Configuration
 
-```bash
-python -V
-pip show torch torchvision mujoco open3d ultralytics openai pyqt5
-conda list > current_env.txt
-```
+### 6.1 VLM and API Configuration
 
-Then compare `current_env.txt` with `实验环境.txt` to identify version mismatches.
+The project reads model settings from `Config` in `config.py` (`MODELS`, `ACTIVE_MODEL`, `QWEN_*`, etc.).
 
-## 5. Models and Configuration
+In GUI mode, you can add/remove/switch models in **Large Model Settings**, then save back to `config.py`.
 
-### 5.1 GraspNet checkpoint
+### 6.2 RRT Configuration (Obstacle Scene)
 
-Make sure this file exists:
+Online RRT parameters are centralized in `DEFAULT_RRT_CFG` inside `obstacle_rrt/online_rrt_executor.py`, including:
 
-```text
-logs/log_rs/checkpoint-rs.tar
-```
+- Basic planning params: `expand_dis`, `goal_sample_rate`, `max_iter`, `max_cycles`
+- Collision params: `obstacle_inflation`, `collision_check_expand_dis`
+- Failure recovery params: `failure_*`, `enable_rescue_replan`, `rescue_*`
+- Descent placement params: `descent_*`
+- Pose-stability params: `enable_wrist3_lock`, `wrist3_lock_deg`, etc.
 
-### 5.2 VLM API configuration
+## 7. Quick Start
 
-The project reads model configuration from `Config` in `config.py` (`MODELS`, `ACTIVE_MODEL`, `QWEN_*`, etc.).
-
-In GUI mode, you can directly add/delete/switch models in the **Large Model Settings** page. Saving writes updates back to `config.py`.
-
-Security recommendation:
-
-- Do not commit real API keys to public repositories.
-- Prefer local untracked configs or environment variables for secret management.
-
-## 6. Quick Start
-
-### 6.1 Run in CLI mode
+### 7.1 CLI Mode
 
 ```bash
 python mujoco_vlm.py
 ```
 
-Then enter natural-language instructions (Chinese/English and other languages are supported), for example:
+Example instructions:
 
 - `Put the petri dish to the right of the microscope`
 - `Put the petri dish back to its original position`
@@ -204,55 +233,61 @@ Then enter natural-language instructions (Chinese/English and other languages ar
 
 Type `q` to quit.
 
-### 6.2 Run in GUI mode
+Note: CLI calls `execute_smart_task(user_input)` with default arguments (`normal scene + default planner`).
+
+### 7.2 GUI Mode (Recommended)
 
 ```bash
 python ui_main_qt.py
 ```
 
-The GUI includes:
+GUI features:
 
-- Chat-style instruction input.
-- Real-time camera view panels.
-- Status and execution feedback.
-- Low-level debug log window.
-- Model settings and UI settings pages.
+- Scene switching (`普通场景` / `障碍场景`)
+- Planner-mode switching (`默认算法` / `RRT避障算法`)
+- Chat-style command input
+- Dual camera panels and realtime logs
+- Model settings and UI settings
 
-## 7. Reproduction Guide
+### 7.3 Obstacle-Scene RRT Example
 
-Recommended validation order:
+1. Launch `ui_main_qt.py`.
+2. Switch to `障碍场景`.
+3. Select planner mode `RRT避障算法`.
+4. Enter: `把培养皿放到显微镜右边`.
+5. Observe RRT stage execution in logs (Stage 5-8).
 
-1. Finish environment and dependency setup.
-2. Confirm `logs/log_rs/checkpoint-rs.tar` and `sam_b.pt` exist.
-3. Configure a valid VLM API (`config.py` or GUI settings).
-4. Run scene smoke test:
+## 8. Reproduction Workflow
+
+1. Finish installation and verify required checkpoints.
+2. Configure a valid VLM API (`config.py` or GUI settings).
+3. Run scene smoke test:
 
 ```bash
 python model/test_lab_equipment.py
 ```
 
-5. Run end-to-end tasks:
+4. Run end-to-end tasks:
 
 ```bash
-python mujoco_vlm.py
-# or
 python ui_main_qt.py
+# or python mujoco_vlm.py
 ```
 
-6. Validate with this example command:
+5. Validate with example instruction:
 
 ```text
 Put the petri dish to the right of the microscope
 ```
 
-7. Check outputs:
+6. Check outputs:
 
-- Inspect camera and logs in the GUI.
-- Check placement prediction visualizations under `PredictionResults/`.
+- Realtime logs and camera views in GUI
+- Placement visualization files in `PredictionResults/`
 
-## 8. Experimental Results
+## 9. Experimental Results
 
-### 8.1 System UI and settings
+### 9.1 System UI and Settings
 
 Main interaction UI:
 
@@ -270,7 +305,7 @@ Debug log page:
 
 ![Debug logs](Visual%20results/调试日志.png)
 
-### 8.2 Perception and workspace capability
+### 9.2 Perception and Workspace Capability
 
 Point-cloud fusion result:
 
@@ -280,7 +315,7 @@ Robot workspace map:
 
 ![Workspace map](Visual%20results/workspace_map.png)
 
-### 8.3 Example task: "把培养皿放到显微镜右边" / "Put the petri dish to the right of the microscope"
+### 9.3 Example Task: "把培养皿放到显微镜右边" / "Put the petri dish to the right of the microscope"
 
 This set corresponds to one complete pipeline: target recognition -> place-point prediction -> grasp execution -> placement completion.
 
@@ -304,15 +339,15 @@ Final placement result in the GUI:
 
 ![Placed in GUI](Visual%20results/放置结果.png)
 
-### 8.4 Demo videos
+### 9.4 Demo Video
 
-- [Demo videos.webm](Visual%20results/演示效果.webm)
+- [Demo](video/演示效果.webm)
 
-## 9. FAQ
+## 10. FAQ
 
 1. `checkpoint-rs.tar` not found
 
-Verify the path: `logs/log_rs/checkpoint-rs.tar`.
+Verify path: `logs/log_rs/checkpoint-rs.tar`.
 
 2. SAM initialization failed
 
@@ -320,13 +355,21 @@ Make sure `sam_b.pt` exists in the project root and `ultralytics` is installed.
 
 3. Qt conflict when launching GUI
 
-`ui_main_qt.py` already includes an LD-library-path fix and self-restart logic. If issues remain, check Qt dynamic library conflicts in your conda/base environment.
+`ui_main_qt.py` includes Qt library path adjustment and self-restart logic. If the issue remains, check Qt dynamic-library conflicts in your conda/base environment.
 
-4. Unstable placement due to ambiguous language
+4. RRT pipeline is not triggered
 
-Use clearer direction/distance expressions, for example: "显微镜右边 5 厘米" or "5 cm to the right of the microscope". The system can ask clarification questions for some ambiguous inputs.
+Make sure all conditions are met:
 
-## 10. Acknowledgements
+- scene is `障碍场景`
+- planner mode is `RRT避障算法`
+- place target is detected successfully (`target_pos` exists)
+
+5. Placement result is unstable due to vague language
+
+Use explicit direction and distance (for example, "5 cm to the right of the microscope"). The system may ask clarification questions for ambiguous descriptions.
+
+## 11. Acknowledgements
 
 - [GraspNet Baseline](https://github.com/graspnet/graspnet-baseline)
 - [MuJoCo](https://mujoco.org/)
