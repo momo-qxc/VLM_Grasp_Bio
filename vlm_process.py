@@ -21,7 +21,7 @@ import logging
 # 禁用 Ultralytics 的日志输出
 logging.getLogger("ultralytics").setLevel(logging.WARNING)
 
-from config import Config
+from config import Config, get_config_manager
 
 
 # ----------------------- 指令解析与放置位置识别 -----------------------
@@ -37,7 +37,7 @@ def parse_instruction(user_input, image_input=None):
         "has_place_instruction": True
     }
     """
-    client = Config.create_qwen_client()
+    client = get_config_manager().create_client()
 
     system_prompt = textwrap.dedent("""\
     你是一个机器人指令解析系统。请分析用户的自然语言指令，提取以下信息：
@@ -102,7 +102,7 @@ def parse_instruction(user_input, image_input=None):
 
     try:
         completion = client.chat.completions.create(
-            model=Config.QWEN_MODEL,
+            model=get_config_manager().get_active_model_name(),
             messages=messages,
             temperature=0.1,
         )
@@ -143,7 +143,7 @@ def check_place_ambiguity(place_description):
             "clarification_question": str # 向用户提问的内容
         }
     """
-    client = Config.create_qwen_client()
+    client = get_config_manager().create_client()
 
     system_prompt = textwrap.dedent("""\
     你是一个机器人指令分析系统。请判断用户的放置位置描述是否足够明确，可以直接执行。
@@ -186,7 +186,7 @@ def check_place_ambiguity(place_description):
 
     try:
         completion = client.chat.completions.create(
-            model=Config.QWEN_MODEL,
+            model=get_config_manager().get_active_model_name(),
             messages=messages,
             temperature=0.1,
         )
@@ -214,7 +214,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
         extra_images: 额外的相机图像列表 (可选，用于辅助识别)
         top_view_image: 俯视视角图像 (可选，用于精确定位放置点)
     """
-    client = Config.create_qwen_client()
+    client = get_config_manager().create_client()
 
     # 如果有俯视图，使用俯视图作为主图像进行坐标预测
     if top_view_image is not None:
@@ -256,7 +256,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
     )
     try:
         parse_completion = client.chat.completions.create(
-            model=Config.QWEN_MODEL,
+            model=get_config_manager().get_active_model_name(),
             messages=[{"role": "user", "content": parse_prompt}],
             temperature=0.1)
         parse_content = parse_completion.choices[0].message.content
@@ -315,7 +315,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
 
         try:
             completion = client.chat.completions.create(
-                model=Config.QWEN_MODEL, messages=messages, temperature=0.1)
+                model=get_config_manager().get_active_model_name(), messages=messages, temperature=0.1)
             content = completion.choices[0].message.content
             print(f"[放置位置识别] 颜色区域中心识别响应: {content}")
 
@@ -359,7 +359,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
                     messages2.append({"role": "user", "content": f"用户指令：{place_description}"})
 
                     completion2 = client.chat.completions.create(
-                        model=Config.QWEN_MODEL, messages=messages2, temperature=0.1)
+                        model=get_config_manager().get_active_model_name(), messages=messages2, temperature=0.1)
                     content2 = completion2.choices[0].message.content
                     print(f"[放置位置识别] 偏移计算响应: {content2}")
 
@@ -461,7 +461,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
 
         try:
             completion = client.chat.completions.create(
-                model=Config.QWEN_MODEL, messages=messages, temperature=0.1)
+                model=get_config_manager().get_active_model_name(), messages=messages, temperature=0.1)
             content = completion.choices[0].message.content
             print(f"[放置位置识别] 第一阶段响应: {content}")
 
@@ -498,7 +498,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
 
                     try:
                         completion2 = client.chat.completions.create(
-                            model=Config.QWEN_MODEL, messages=messages2, temperature=0.1)
+                            model=get_config_manager().get_active_model_name(), messages=messages2, temperature=0.1)
                         content2 = completion2.choices[0].message.content
                         print(f"[放置位置识别] 偏移计算响应: {content2}")
 
@@ -591,7 +591,7 @@ def detect_place_position(place_description, global_image, depth_image=None, ext
 
     try:
         completion = client.chat.completions.create(
-            model=Config.QWEN_MODEL, messages=messages, temperature=0.1)
+            model=get_config_manager().get_active_model_name(), messages=messages, temperature=0.1)
         content = completion.choices[0].message.content
         print(f"[放置位置识别] 响应: {content}")
 
@@ -684,7 +684,7 @@ def generate_robot_actions(user_command, image_input=None):
     返回一个 dict，包含 "response" 和 "coordinates"。
     参数 image_input 为 numpy 数组（BGR 格式）。
     """
-    client = Config.create_qwen_client()
+    client = get_config_manager().create_client()
     system_prompt = textwrap.dedent("""\
     你是一个精密机械臂视觉控制系统，具备先进的多模态感知能力。请严格按照以下步骤执行任务：
 
@@ -730,7 +730,7 @@ def generate_robot_actions(user_command, image_input=None):
     try:
         # 使用OpenAI客户端调用API
         completion = client.chat.completions.create(
-            model=Config.QWEN_MODEL, 
+            model=get_config_manager().get_active_model_name(), 
             # model="gpt-5.2-2025-12-11",  # 指定模型名称，请确认服务提供商支持的模型名
             # qwen3-omni-flash"
             # model="qwen-vl-plus",

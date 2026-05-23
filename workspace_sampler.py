@@ -41,6 +41,9 @@ TURN_AROUND_X = 0.7  # 与 grasp_process_optimized.py 一致
 Z_TABLE = 0.76   # 桌面放置高度
 STEP    = 0.04   # 采样间隔（米），越小越精细但越慢
 
+# 在姿态切换区域（x=0.6~0.8）尝试两种姿态，选择可达的那个
+TRANSITION_ZONE = (0.6, 0.8)
+
 xs = np.arange(-0.2, 2.2, STEP)
 ys = np.arange(-0.8, 1.6, STEP)
 
@@ -58,15 +61,26 @@ for x in xs:
         if count % 200 == 0:
             print(f"  进度: {count}/{total}")
 
-        R_down = R_down_back if x < TURN_AROUND_X else R_down_front
-        T_target = sm.SE3.Rt(R_down, [x, y, Z_TABLE])
-        try:
-            q = env.robot.ikine(T_target)
-            if len(q) > 0:
-                reachable_pts.append((x, y, q))
-            else:
-                unreachable.append([x, y])
-        except Exception:
+        # 在过渡区域尝试两种姿态
+        if TRANSITION_ZONE[0] <= x <= TRANSITION_ZONE[1]:
+            orientations = [R_down_back, R_down_front]
+        else:
+            R_down = R_down_back if x < TURN_AROUND_X else R_down_front
+            orientations = [R_down]
+
+        reached = False
+        for R in orientations:
+            T_target = sm.SE3.Rt(R, [x, y, Z_TABLE])
+            try:
+                q = env.robot.ikine(T_target)
+                if len(q) > 0:
+                    reachable_pts.append((x, y, q))
+                    reached = True
+                    break
+            except Exception:
+                continue
+
+        if not reached:
             unreachable.append([x, y])
 
 unreachable = np.array(unreachable)
@@ -78,35 +92,35 @@ if len(reachable) > 0:
     print(f"Y 范围: [{reachable[:,1].min():.3f}, {reachable[:,1].max():.3f}] m")
 
 # ── 绘图 ──────────────────────────────────────────────
-fig, ax = plt.subplots(figsize=(10, 10))
+fig, ax = plt.subplots(figsize=(12, 12))
 
 if len(unreachable) > 0:
-    ax.scatter(unreachable[:,0], unreachable[:,1], c='#8b0000', s=8, label='不可达')
+    ax.scatter(unreachable[:,0], unreachable[:,1], c='#8b0000', s=12, label='不可达', alpha=0.8)
 if len(reachable) > 0:
-    ax.scatter(reachable[:,0], reachable[:,1], c='#22aa44', s=8, label='可达')
+    ax.scatter(reachable[:,0], reachable[:,1], c='#22aa44', s=12, label='可达', alpha=0.8)
 
 # 机械臂底座
 base_x, base_y = Config.ROBOT_BASE_X, Config.ROBOT_BASE_Y
-ax.plot(base_x, base_y, 'k*', markersize=18, label=f'底座 ({base_x}, {base_y})')
+ax.plot(base_x, base_y, 'k*', markersize=13, label=f'底座 ({base_x}, {base_y})', zorder=10)
 circle = plt.Circle((base_x, base_y), 0.85, color='blue', fill=False,
-                     linestyle='--', linewidth=1.5, label='理论臂展 0.85m')
+                     linestyle='--', linewidth=2.5, label='理论臂展 0.85m')
 ax.add_patch(circle)
 
 # 奇异点区域（overhead singularity，UR5e d4=0.134m）
 sing_circle = plt.Circle((base_x, base_y), 0.134, color='purple', fill=True,
-                          alpha=0.25, linestyle='-', linewidth=2,
+                          alpha=0.25, linestyle='-', linewidth=2.5,
                           label='奇异区域 (r≈0.13m)')
 ax.add_patch(sing_circle)
 sing_border = plt.Circle((base_x, base_y), 0.134, color='purple', fill=False,
-                          linestyle='-', linewidth=2)
+                          linestyle='-', linewidth=2.5)
 ax.add_patch(sing_border)
 
 # 当前代码有效工作空间（环形，来自 Config）
 ws_inner = plt.Circle((base_x, base_y), Config.WORKSPACE_R_MIN, color='orange', fill=False,
-                       linestyle=':', linewidth=2)
+                       linestyle=':', linewidth=2.5)
 ax.add_patch(ws_inner)
 ws_outer = plt.Circle((base_x, base_y), Config.WORKSPACE_R_MAX, color='orange', fill=False,
-                       linestyle=':', linewidth=2,
+                       linestyle=':', linewidth=2.5,
                        label=f'代码工作空间 r=[{Config.WORKSPACE_R_MIN},{Config.WORKSPACE_R_MAX}]m')
 ax.add_patch(ws_outer)
 # 桌面边界框
@@ -114,34 +128,49 @@ table_rect = patches.Rectangle(
     (Config.TABLE_X_MIN, Config.TABLE_Y_MIN),
     Config.TABLE_X_MAX - Config.TABLE_X_MIN,
     Config.TABLE_Y_MAX - Config.TABLE_Y_MIN,
-    linewidth=1.5, edgecolor='orange', facecolor='none',
+    linewidth=2, edgecolor='orange', facecolor='none',
     linestyle='--', label='桌面边界'
 )
 ax.add_patch(table_rect)
 
 # 货架区域（shelf_collisions: center=1.79,0.6, half-size=0.18,0.6）
 shelf_rect = patches.Rectangle(
-    (1.79 - 0.18, 0.6 - 0.6), 
+    (1.79 - 0.18, 0.6 - 0.6),
     0.36, 1.2,
-    linewidth=2, edgecolor='gray', facecolor='#80808033', linestyle='-.', label='货架区域'
+    linewidth=2.5, edgecolor='gray', facecolor='#80808033', linestyle='-.', label='货架区域'
 )
 ax.add_patch(shelf_rect)
 
 # 绿色区域（zone_pickup: center=1.4,0.6, half-size=0.2,0.6）
 green = patches.Rectangle((1.2, 0.0), 0.4, 1.2,
-                            linewidth=2, edgecolor='green', facecolor='#00ff0033', label='绿色区域')
+                            linewidth=2.5, edgecolor='green', facecolor='#00ff0033', label='绿色区域')
 ax.add_patch(green)
 
 # 红色区域（zone_drop: center=0.2,0.2, half-size=0.2,0.2）
 red = patches.Rectangle((0.0, 0.0), 0.4, 0.4,
-                          linewidth=2, edgecolor='red', facecolor='#ff000033', label='红色区域')
+                          linewidth=2.5, edgecolor='red', facecolor='#ff000033', label='红色区域')
 ax.add_patch(red)
 
-ax.set_xlabel('X (m)'); ax.set_ylabel('Y (m)')
-ax.set_title(f'UR5e 工作空间（z={Z_TABLE}m，末端朝下）')
-ax.legend(loc='upper left', markerscale=0.5, framealpha=1.0, facecolor='white', edgecolor='0.8')
+ax.set_xlabel('X (m)', fontsize=14)
+ax.set_ylabel('Y (m)', fontsize=14)
+ax.set_title(f'UR5e 工作空间（z={Z_TABLE}m，末端朝下）',
+             fontsize=16, fontweight='bold', pad=15)
+ax.legend(loc='upper left', fontsize=11, markerscale=1.5, framealpha=0.95,
+          facecolor='white', edgecolor='0.5', shadow=True)
 ax.axis('equal')
 ax.grid(True, alpha=0.3)
+ax.tick_params(labelsize=12)
+
+# 添加说明文本
+info_text = (
+    f"采样间隔: {STEP}m\n"
+    f"姿态切换: x={TURN_AROUND_X}m\n"
+    f"过渡区域: x∈[{TRANSITION_ZONE[0]}, {TRANSITION_ZONE[1]}]m\n"
+    f"（在过渡区域尝试两种姿态）"
+)
+ax.text(0.02, 0.98, info_text, transform=ax.transAxes,
+        fontsize=10, verticalalignment='top',
+        bbox=dict(boxstyle='round', facecolor='wheat', alpha=0.9, pad=0.8))
 plt.tight_layout()
 plt.savefig('workspace_map.png', dpi=150)
 print("\n已保存: workspace_map.png")

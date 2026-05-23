@@ -1704,22 +1704,36 @@ def _execute_grasp_desktop_fusion(env, gg, T_wc, T_wo_unused, target_pos, object
     # 定义最终放置位置 (可随意修改)
     if target_pos is None:
         target_pos = [1.4, 0.5]
-    tp = [target_pos[0], target_pos[1]] 
+    tp = [target_pos[0], target_pos[1]]
     # target_pos = [0.2, 0.2] # 测试背后位置
-    
-    # 策略判断：是去"背后"还是"侧面"？
+
+    # 策略判断：根据目标位置和当前抓取位置选择合适的路径策略
+    # 1. 背后区域：x < 0.5 且 y < 0.5，需要转身
     is_going_back = (tp[0] < 0.5 and tp[1] < 0.5)
+    # 2. 货架区域：x > 1.2，需要使用关节空间避障，避免撞到显微镜等障碍物
+    is_going_to_shelf = (tp[0] > 1.2)
+    # 3. 从显微镜附近（x > 1.0）去货架，需要特别小心
+    grasp_near_microscope = (grasp_world_pos[0] > 1.0 and grasp_world_pos[0] < 1.5)
+    needs_safe_path = is_going_to_shelf and grasp_near_microscope
 
     if is_going_back:
         # 【去背后 (0.2, 0.2)】：需要大角度旋转，且容易碰到奇异点
         # 目标姿态：朝下朝后
         T_target_high = sm.SE3.Trans(tp[0], tp[1], T_lift.t[2]) * sm.SE3.Rz(np.pi) * sm.SE3.Rx(np.pi)
         use_joint_transit_strategy = True
+        print(f"[PLACE] 去背后区域，使用关节空间插值")
+    elif needs_safe_path:
+        # 【从显微镜附近去货架】：需要使用关节空间避障
+        # 目标姿态：保持抓取时的姿态
+        T_target_high = sm.SE3.Trans(tp[0], tp[1], T_lift.t[2]) * sm.SE3(grasp_rotation)
+        use_joint_transit_strategy = True
+        print(f"[PLACE] 从显微镜附近去货架，使用关节空间避障")
     else:
         # 【去侧面/前方 (1.4, 0.3)】：不需要转身，直接平移
         # 目标姿态：保持抓取时的姿态 (grasp_rotation)
         T_target_high = sm.SE3.Trans(tp[0], tp[1], T_lift.t[2]) * sm.SE3(grasp_rotation)
         use_joint_transit_strategy = False # 侧面直接走直线 Cartesian 即可
+        print(f"[PLACE] 去侧面/前方，使用笛卡尔直线")
 
     
     # 获取当前的关节角度

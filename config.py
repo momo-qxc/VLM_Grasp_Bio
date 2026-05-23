@@ -4,11 +4,6 @@
 
 
 class Config:
-    # ==================== VLM 主模型（用于抓取识别）====================
-    QWEN_API_KEY = 'your_key'
-    QWEN_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-    QWEN_MODEL = 'qwen-vl-max-latest'
-
     # ==================== 润色专用模型（不在 UI 设置中显示）====================
     POLISH_API_KEY = 'your_key'
     POLISH_BASE_URL = 'https://api.deepseek.com'
@@ -18,10 +13,6 @@ class Config:
     MODELS = {
         'qwen-vl-max-latest': {
             'url': 'https://dashscope.aliyuncs.com/compatible-mode/v1',
-            'key': 'your_key',
-        },
-        'gpt-5.2-pro-2025-12-11': {
-            'url': 'https://api.openai.com/v1',
             'key': 'your_key',
         },
     }
@@ -46,20 +37,42 @@ class Config:
 
     @classmethod
     def get_qwen_client_config(cls):
-        return {'api_key': cls.QWEN_API_KEY, 'base_url': cls.QWEN_BASE_URL}
+        """获取当前激活模型的配置"""
+        active_config = cls.MODELS.get(cls.ACTIVE_MODEL)
+        if not active_config:
+            raise ValueError(f"未找到模型配置: {cls.ACTIVE_MODEL}")
+        return {
+            'api_key': active_config.get('key', ''),
+            'base_url': active_config.get('url', '')
+        }
 
     @classmethod
     def create_qwen_client(cls):
+        """创建使用当前激活模型配置的客户端"""
         from openai import OpenAI
         import httpx
+        config = cls.get_qwen_client_config()
         return OpenAI(
-            api_key=cls.QWEN_API_KEY,
-            base_url=cls.QWEN_BASE_URL,
+            api_key=config['api_key'],
+            base_url=config['base_url'],
             http_client=httpx.Client(trust_env=False)
         )
 
     @classmethod
+    def get_active_model_name(cls):
+        """获取当前激活的模型名称"""
+        return cls.ACTIVE_MODEL
+
+    @classmethod
     def validate(cls):
-        if not cls.QWEN_API_KEY or cls.QWEN_API_KEY == 'your_api_key_here':
-            raise ValueError("请在 config.py 中设置 QWEN_API_KEY")
+        """验证当前激活模型的配置是否有效"""
+        if not cls.ACTIVE_MODEL:
+            raise ValueError("未设置 ACTIVE_MODEL")
+        if cls.ACTIVE_MODEL not in cls.MODELS:
+            raise ValueError(f"ACTIVE_MODEL '{cls.ACTIVE_MODEL}' 不在 MODELS 列表中")
+        config = cls.MODELS[cls.ACTIVE_MODEL]
+        if not config.get('key'):
+            raise ValueError(f"模型 '{cls.ACTIVE_MODEL}' 缺少 API Key")
+        if not config.get('url'):
+            raise ValueError(f"模型 '{cls.ACTIVE_MODEL}' 缺少 API URL")
         return True

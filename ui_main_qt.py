@@ -621,9 +621,9 @@ def save_to_config(models: dict, active_model: str, font_size: int = 13):
         m_lines.append("    }")
         models_repr = "".join(m_lines)
 
-        polish_key  = repr(getattr(Config, 'POLISH_API_KEY',  'sk-f668b6a0a68643dea174b74e30ecf9b1'))
-        polish_url  = repr(getattr(Config, 'POLISH_BASE_URL', 'https://api.deepseek.com'))
-        polish_model= repr(getattr(Config, 'POLISH_MODEL',    'deepseek-chat'))
+        polish_key  = repr(Config.POLISH_API_KEY)
+        polish_url  = repr(Config.POLISH_BASE_URL)
+        polish_model= repr(Config.POLISH_MODEL)
 
         content = f'''"""
 全局配置文件 - 统一管理 API Keys、模型名称、URL 等
@@ -631,11 +631,6 @@ def save_to_config(models: dict, active_model: str, font_size: int = 13):
 
 
 class Config:
-    # ==================== VLM 主模型（用于抓取识别）====================
-    QWEN_API_KEY = {repr(Config.QWEN_API_KEY)}
-    QWEN_BASE_URL = {repr(Config.QWEN_BASE_URL)}
-    QWEN_MODEL = {repr(Config.QWEN_MODEL)}
-
     # ==================== 润色专用模型（不在 UI 设置中显示）====================
     POLISH_API_KEY = {polish_key}
     POLISH_BASE_URL = {polish_url}
@@ -664,29 +659,59 @@ class Config:
 
     @classmethod
     def get_qwen_client_config(cls):
-        return {{'api_key': cls.QWEN_API_KEY, 'base_url': cls.QWEN_BASE_URL}}
+        """获取当前激活模型的配置"""
+        active_config = cls.MODELS.get(cls.ACTIVE_MODEL)
+        if not active_config:
+            raise ValueError(f"未找到模型配置: {{cls.ACTIVE_MODEL}}")
+        return {{
+            'api_key': active_config.get('key', ''),
+            'base_url': active_config.get('url', '')
+        }}
 
     @classmethod
     def create_qwen_client(cls):
+        """创建使用当前激活模型配置的客户端"""
         from openai import OpenAI
         import httpx
+        config = cls.get_qwen_client_config()
         return OpenAI(
-            api_key=cls.QWEN_API_KEY,
-            base_url=cls.QWEN_BASE_URL,
+            api_key=config['api_key'],
+            base_url=config['base_url'],
             http_client=httpx.Client(trust_env=False)
         )
 
     @classmethod
+    def get_active_model_name(cls):
+        """获取当前激活的模型名称"""
+        return cls.ACTIVE_MODEL
+
+    @classmethod
     def validate(cls):
-        if not cls.QWEN_API_KEY or cls.QWEN_API_KEY == 'your_api_key_here':
-            raise ValueError("请在 config.py 中设置 QWEN_API_KEY")
+        """验证当前激活模型的配置是否有效"""
+        if not cls.ACTIVE_MODEL:
+            raise ValueError("未设置 ACTIVE_MODEL")
+        if cls.ACTIVE_MODEL not in cls.MODELS:
+            raise ValueError(f"ACTIVE_MODEL '{{cls.ACTIVE_MODEL}}' 不在 MODELS 列表中")
+        config = cls.MODELS[cls.ACTIVE_MODEL]
+        if not config.get('key'):
+            raise ValueError(f"模型 '{{cls.ACTIVE_MODEL}}' 缺少 API Key")
+        if not config.get('url'):
+            raise ValueError(f"模型 '{{cls.ACTIVE_MODEL}}' 缺少 API URL")
         return True
 '''
         with open(config_path, "w") as f:
             f.write(content)
+
+        # 重新加载配置模块
         import importlib, sys as _sys
         if 'config' in _sys.modules:
             importlib.reload(_sys.modules['config'])
+
+        # 强制重新加载 vlm_process 模块以使用新配置
+        if 'vlm_process' in _sys.modules:
+            importlib.reload(_sys.modules['vlm_process'])
+
+        print(f"[save_to_config] 配置已保存并重新加载，当前模型: {active_model}", flush=True)
     except Exception as e:
         print(f"[save_to_config] 失败: {e}", flush=True)
         raise
@@ -924,7 +949,7 @@ class MainWindow(QMainWindow):
         examples = ["把培养皿放到显微镜右边",
                     "把培养皿放回货架",
                     "把培养皿放到显微镜左边一点",
-                    "把培养皿放到绿色区域左边5厘米",
+                    "把培养皿放到绿色区域左边4厘米",
                     "把培养皿放回上次的位置",
                     "把鸭子放到显微镜左边"]
         for ex in examples:
@@ -1298,6 +1323,15 @@ class MainWindow(QMainWindow):
         self.btn_exec.setEnabled(False)
         self.btn_stop.setEnabled(True)
         self._add_chat_bubble(f"收到指令：{instruction}\n正在分析，请稍候...", "ai")
+
+        # 输出当前使用的视觉模型
+        from config import Config
+        try:
+            active_model = Config.get_active_model_name()
+            self.sig.add_log.emit("INFO", f"[视觉模型] 使用: {active_model}")
+        except Exception:
+            pass
+
         self.sig.add_log.emit("STEP",
             f">> 开始执行 | 模式: {mode} | 场景: {scene_name} | 规划: {planner_mode} | 指令: {instruction or '(无)'}")
         self._task_queue.put((mode, instruction, planner_mode, scene_name))
@@ -1372,9 +1406,9 @@ class MainWindow(QMainWindow):
                 from config import Config as _Cfg
                 result = self._call_llm_api(
                     text, sys_p,
-                    api_url=getattr(_Cfg, 'POLISH_BASE_URL', 'https://api.deepseek.com'),
-                    api_key=getattr(_Cfg, 'POLISH_API_KEY',  'sk-f668b6a0a68643dea174b74e30ecf9b1'),
-                    model=getattr(_Cfg,   'POLISH_MODEL',    'deepseek-chat'),
+                    api_url=_Cfg.POLISH_BASE_URL,
+                    api_key=_Cfg.POLISH_API_KEY,
+                    model=_Cfg.POLISH_MODEL,
                 )
                 self.sig.add_log.emit("INFO", f"[润色] API 返回: {result[:80]}")
                 ok = not result.startswith("API 调用失败")
@@ -1412,8 +1446,10 @@ class MainWindow(QMainWindow):
             _model = model   or self._settings.get("model_name", "")
             if not _key:
                 from config import Config
-                _url, _key, _model = (
-                    Config.QWEN_BASE_URL, Config.QWEN_API_KEY, Config.QWEN_MODEL)
+                config = Config.get_qwen_client_config()
+                _url = config['base_url']
+                _key = config['api_key']
+                _model = Config.get_active_model_name()
             print(f"[_call_llm_api] url={_url} model={_model}", flush=True)
             client = OpenAI(api_key=_key, base_url=_url,
                             http_client=httpx.Client(trust_env=False, timeout=30.0))
@@ -1687,14 +1723,31 @@ class MainWindow(QMainWindow):
                 Toast(dlg, f"保存失败：{str(e)[:40]}", success=False)
                 return
             self._settings = load_settings()
-            
+
             # 实时应用配置
             if hasattr(self, '_timer_fps'):
                 self._timer_fps = 1.0 / fps_spin_box.value()
-                
+
             # 分页提示
             if active_tab == 0:
-                Toast(dlg, "✅ 已保存大模型配置", success=True)
+                # 实时更新配置管理器
+                from config import get_config_manager
+                config_mgr = get_config_manager()
+                config_mgr.update_models(models)
+                old_model = config_mgr.get_active_model_name()
+
+                if old_model != sel:
+                    # 实时切换模型
+                    success = config_mgr.set_active_model(sel)
+                    if success:
+                        Toast(dlg, "✅ 模型已实时切换！", success=True)
+                        self._add_chat_bubble(
+                            f"✅ 模型已从 '{old_model}' 实时切换到 '{sel}'，无需重启！", "ai")
+                        self.sig.add_log.emit("INFO", f"[视觉模型] 已实时切换到: {sel}")
+                    else:
+                        Toast(dlg, "❌ 模型切换失败", success=False)
+                else:
+                    Toast(dlg, "✅ 已保存大模型配置", success=True)
             else:
                 Toast(dlg, "✅ 已保存界面设置", success=True)
 
@@ -1827,6 +1880,16 @@ class MainWindow(QMainWindow):
             self.env_ready = True
             log_queue.put(("SUCCESS", "[OK] MuJoCo 环境就绪，启动视频流"))
 
+            # 输出当前使用的视觉模型信息
+            from config import Config
+            try:
+                active_model = Config.get_active_model_name()
+                model_config = Config.get_qwen_client_config()
+                log_queue.put(("INFO", f"[视觉模型] 当前使用: {active_model}"))
+                log_queue.put(("INFO", f"[视觉模型] API URL: {model_config['base_url']}"))
+            except Exception as e:
+                log_queue.put(("WARN", f"[视觉模型] 无法获取模型信息: {e}"))
+
             # 创建共享任务执行引擎
             from task_executor import TaskExecutor
             self.executor = TaskExecutor(
@@ -1889,6 +1952,15 @@ class MainWindow(QMainWindow):
                     self.env_ready = True
                     self.current_scene_path = scene_path
                     log_queue.put(("SUCCESS", f"[OK] 场景切换成功: {scene_name}"))
+
+                    # 输出当前使用的视觉模型信息
+                    from config import Config
+                    try:
+                        active_model = Config.get_active_model_name()
+                        log_queue.put(("INFO", f"[视觉模型] 当前使用: {active_model}"))
+                    except Exception:
+                        pass
+
                     self.sig.add_chat.emit(f"✓ {scene_name}已加载完成", "ai")
                     self.sig.set_status.emit("ready")
                     self.sig.set_scene_status.emit(scene_name)

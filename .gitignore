@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .env
 video/mujoco运行效果.mp4
+mjmodel.mjb
